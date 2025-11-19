@@ -1,0 +1,1 @@
+Environment uses PowerShell (`pwsh.exe`). Listing files uses `Get-ChildItem` (alias `ls`), read files via `Get-Content`, run npm scripts with `npm run <script>`. Use `rg` for fast search when available; otherwise `Select-String`. Git is available via standard `git` CLI.

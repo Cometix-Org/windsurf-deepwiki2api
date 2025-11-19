@@ -1,0 +1,266 @@
+syntax = "proto3";
+
+package exa.deepwiki;
+
+import "google/protobuf/timestamp.proto";
+
+// ----------------------------------------------------------------------
+// DeepWiki enums
+// ----------------------------------------------------------------------
+
+// DeepWiki request granularity.
+enum DeepWikiRequestType {
+  DEEP_WIKI_REQUEST_TYPE_UNSPECIFIED = 0;
+  DEEP_WIKI_REQUEST_TYPE_SUMMARY = 1;
+  DEEP_WIKI_REQUEST_TYPE_ARTICLE = 2;
+}
+
+// Symbol kind used by DeepWiki.
+enum DeepWikiSymbolType {
+  DEEP_WIKI_SYMBOL_TYPE_UNSPECIFIED = 0;
+  DEEP_WIKI_SYMBOL_TYPE_FILE = 1;
+  DEEP_WIKI_SYMBOL_TYPE_MODULE = 2;
+  DEEP_WIKI_SYMBOL_TYPE_NAMESPACE = 3;
+  DEEP_WIKI_SYMBOL_TYPE_PACKAGE = 4;
+  DEEP_WIKI_SYMBOL_TYPE_CLASS = 5;
+  DEEP_WIKI_SYMBOL_TYPE_METHOD = 6;
+  DEEP_WIKI_SYMBOL_TYPE_PROPERTY = 7;
+  DEEP_WIKI_SYMBOL_TYPE_FIELD = 8;
+  DEEP_WIKI_SYMBOL_TYPE_CONSTRUCTOR = 9;
+  DEEP_WIKI_SYMBOL_TYPE_ENUM = 10;
+  DEEP_WIKI_SYMBOL_TYPE_INTERFACE = 11;
+  DEEP_WIKI_SYMBOL_TYPE_FUNCTION = 12;
+  DEEP_WIKI_SYMBOL_TYPE_VARIABLE = 13;
+  DEEP_WIKI_SYMBOL_TYPE_CONSTANT = 14;
+  DEEP_WIKI_SYMBOL_TYPE_STRING = 15;
+  DEEP_WIKI_SYMBOL_TYPE_NUMBER = 16;
+  DEEP_WIKI_SYMBOL_TYPE_BOOLEAN = 17;
+  DEEP_WIKI_SYMBOL_TYPE_ARRAY = 18;
+  DEEP_WIKI_SYMBOL_TYPE_OBJECT = 19;
+  DEEP_WIKI_SYMBOL_TYPE_KEY = 20;
+  DEEP_WIKI_SYMBOL_TYPE_NULL = 21;
+  DEEP_WIKI_SYMBOL_TYPE_ENUM_MEMBER = 22;
+  DEEP_WIKI_SYMBOL_TYPE_STRUCT = 23;
+  DEEP_WIKI_SYMBOL_TYPE_EVENT = 24;
+  DEEP_WIKI_SYMBOL_TYPE_OPERATOR = 25;
+  DEEP_WIKI_SYMBOL_TYPE_TYPE_PARAMETER = 26;
+}
+
+// DeepWiki serving model tier.
+enum DeepWikiModelType {
+  DEEP_WIKI_MODEL_TYPE_UNSPECIFIED = 0;
+  DEEP_WIKI_MODEL_TYPE_CAPACITY_FALLBACK = 1;
+  DEEP_WIKI_MODEL_TYPE_LITE_FREE = 2;
+  DEEP_WIKI_MODEL_TYPE_LITE_PAID = 3;
+  DEEP_WIKI_MODEL_TYPE_PREMIUM = 4;
+}
+
+// Source of a low-level chat message used in DeepWiki streaming.
+enum ChatMessageSource {
+  CHAT_MESSAGE_SOURCE_UNSPECIFIED = 0;
+  CHAT_MESSAGE_SOURCE_USER        = 1;
+  CHAT_MESSAGE_SOURCE_ASSISTANT   = 2;
+  CHAT_MESSAGE_SOURCE_SYSTEM      = 3;
+  CHAT_MESSAGE_SOURCE_TOOL        = 4;
+}
+
+// ----------------------------------------------------------------------
+// Client metadata (from DeepWiki request field 1)
+// Wire layout matches the windsuf/windsurf ClientMetadata used on the wire.
+// Only the fields actually observed in the HAR are modeled here; other
+// field numbers remain free for future reverse-engineering.
+// ----------------------------------------------------------------------
+message Metadata {
+  // 1: "windsurf"
+  string ide_name = 1;
+
+  // 2: extension version, e.g. "1.48.2"
+  string extension_version = 2;
+
+  // 3: "sk-ws-..." style key
+  string api_key = 3;
+
+  // 4: locale, e.g. "zh-cn"
+  string locale = 4;
+
+  // 5: JSON with OS information
+  string os_info_json = 5;
+
+  // 7: IDE version (e.g. "1.12.27")
+  string ide_version = 7;
+
+  // 8: JSON with hardware information
+  string hardware_info_json = 8;
+
+  // 10: workspace id (UUID)
+  string workspace_id = 10;
+
+  // 12: extension name, usually "windsurf"
+  string extension_name = 12;
+
+  // 21: JWT access token
+  string auth_token = 21;
+
+  // 24: session / device id
+  string session_id = 24;
+
+  // 26: OS edition, e.g. "Pro"
+  string os_edition = 26;
+
+  // 27: machine fingerprint (not present in the sample HAR, but reserved)
+  string machine_id = 27;
+}
+
+// ----------------------------------------------------------------------
+// DeepWiki symbol context (indices into source code)
+// ----------------------------------------------------------------------
+
+// A single span in a source file.
+message DeepWikiSymbolRange {
+  int64 start_line = 1;
+  int64 start_column = 2;
+  int64 end_line = 3;
+  int64 end_column = 4;
+}
+
+// Detailed context around a symbol as used by DeepWiki.
+message DeepWikiSymbolContext {
+  string symbol_name = 1;
+  string symbol_uri = 2;
+  DeepWikiSymbolRange symbol_range = 3;
+  DeepWikiSymbolType symbol_type = 4;
+  string file_context = 5;
+  string usage_context = 6;
+  string trace_context = 7;
+  string quick_grep_context = 8;
+  google.protobuf.Timestamp timestamp = 9;
+}
+
+// ----------------------------------------------------------------------
+// Streaming chat primitives shared with DeepWiki responses
+// ----------------------------------------------------------------------
+
+// A single header returned as part of streaming stats.
+message StreamingHeader {
+  string name  = 1;
+  string value = 2;
+}
+
+// Per-frame stats (latency, token counts, headers, etc.).
+message StreamingStats {
+  // 1: total latency (ms)
+  uint32 latency_ms = 1;
+
+  // 2: server-side time (ms) – queue + compute
+  uint32 server_time_ms = 2;
+
+  // 3: number of output tokens
+  uint32 output_tokens = 3;
+
+  // 5: number of input tokens
+  uint32 input_tokens = 5;
+
+  // 6: provider id (e.g. 21 for a specific model)
+  uint32 provider_id = 6;
+
+  // 8: echoed headers (x-request-id, responseId, trafficType, etc.)
+  repeated StreamingHeader headers = 8;
+}
+
+// Tool call emitted in a streaming frame.
+message StreamingResponseToolCall {
+  string call_id        = 1;
+  string tool           = 2;
+  string arguments_json = 3;
+}
+
+// Low-level streaming chat delta used inside DeepWiki responses.
+// This matches the wire layout of ApiGetChatMessageResponse.
+message ApiGetChatMessageResponse {
+  // 1: "bot-..." – stable across frames for this article
+  string message_id = 1;
+
+  // 2: timestamp of this frame
+  google.protobuf.Timestamp timestamp = 2;
+
+  // 3: text delta (token chunk)
+  string text_delta = 3;
+
+  // 4: chunk type (1 = normal token chunk, other values for control/debug)
+  uint32 chunk_type = 4;
+
+  // 5: event type (e.g. some frames are 2, 10, etc.)
+  uint32 event_type = 5;
+
+  // 6: tool calls (only present when the assistant triggers tools)
+  repeated StreamingResponseToolCall tool_calls = 6;
+
+  // 7: stats (tokens, latency, headers)
+  StreamingStats stats = 7;
+
+  // 12: progress within the stream [0.0, 1.0]
+  double progress = 12;
+
+  // 17: conversation id, e.g. "deepwiki-..."
+  string conversation_id = 17;
+}
+
+// ----------------------------------------------------------------------
+// DeepWiki RPC messages
+// ----------------------------------------------------------------------
+
+// Request for DeepWiki content.
+message GetDeepWikiRequest {
+  // Client / environment metadata.
+  Metadata metadata = 1;
+
+  // Summary vs full article.
+  DeepWikiRequestType request_type = 2;
+
+  // Symbol to explain (e.g. "IInstantiationService").
+  string symbol_name = 3;
+
+  // URI of the symbol (e.g. file://.../instantiation.ts).
+  string symbol_uri = 4;
+
+  // Large text block with file/context information.
+  string context = 5;
+
+  // Kind of the symbol.
+  DeepWikiSymbolType symbol_type = 6;
+
+  // Requested language for the article (e.g. "中文（中国）").
+  string language = 7;
+
+  // Serving tier / model hint. Observed as 1 in the sample HAR.
+  DeepWikiModelType model_type = 8;
+}
+
+// Streaming response from DeepWiki.
+// A single GetDeepWiki call yields many of these messages over a Connect
+// stream; concatenating all text_delta fields (in order) reconstructs the
+// full DeepWiki article.
+message GetDeepWikiResponse {
+  // Per-frame streaming delta from the model.
+  ApiGetChatMessageResponse response = 1;
+
+  // Selected model tier for this article (e.g. PREMIUM = 4).
+  DeepWikiModelType model_type = 2;
+
+  // True once the article is fully generated. Absent/false in earlier frames.
+  bool is_article_done = 3;
+
+  // Optional request id used for tracing (not set in the sample HAR).
+  string request_id = 4;
+
+  // Optional follow-up prompts (not set in the sample HAR).
+  string followup_questions = 5;
+}
+
+// ----------------------------------------------------------------------
+// DeepWiki RPC surface.
+// ----------------------------------------------------------------------
+service DeepWikiService {
+  // Server-streaming RPC, matching getDeepWiki in the compiled client.
+  rpc GetDeepWiki(GetDeepWikiRequest) returns (stream GetDeepWikiResponse);
+}

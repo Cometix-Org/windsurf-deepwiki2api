@@ -1,0 +1,1 @@
+After changes, run `npm run compile` (or `npm run watch` during development). Execute relevant tests via `npm test` when touching functionality. Verify lint (`npm run lint`) before packaging. Update README/CHANGELOG if commands or behaviors change. Build artifacts go under `dist/` via esbuild; restart VS Code extension host to validate commands.

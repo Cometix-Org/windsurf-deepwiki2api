@@ -1,0 +1,7 @@
+- `npm install` – install dependencies.
+- `npm run compile` – type-check, lint, and build via esbuild.
+- `npm run watch` – parallel watch mode for esbuild + tsc.
+- `npm test` – run extension tests via `vscode-test`.
+- `npm run lint` – run ESLint on `src/`.
+- `npm run check-types` – TypeScript no-emit check.
+- `npm run package` – production build (type check + lint + esbuild --production).
