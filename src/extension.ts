@@ -20,8 +20,7 @@ const HAS_OUTLINE_CONTEXT_KEY = 'contextCodeText.hasOutlineContext';
 let contextUpdateToken = 0;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
-	// Run DeepWiki startup smoke test and log to 'Code Context Test'
-	void runStartupDeepwikiSmokeTest();
+	// Removed automatic DeepWiki startup smoke test to avoid unintended network calls
 	const lsp = new LspService(vscode.commands, vscode.workspace);
 	const nodeScore = new NodeScoreService();
 	const nodeCreator = new NodeCreatorService(lsp);

@@ -9,7 +9,7 @@ export class ContextWebviewViewProvider implements vscode.WebviewViewProvider {
 
 	public resolveWebviewView(webviewView: vscode.WebviewView): void {
 		this.view = webviewView;
-		webviewView.webview.options = {
+    	webviewView.webview.options = {
 			enableScripts: false
 		};
 		webviewView.webview.html = this.renderHtml('Context Code Text', '将光标移动到代码中的一个符号上以查看 DeepWiki 结果。');
@@ -76,11 +76,9 @@ export class ContextWebviewViewProvider implements vscode.WebviewViewProvider {
 		}
 	}
 
+    
 	private renderHtml(title: string, body: string): string {
-		const escapedBody = body
-			.replace(/&/g, '&amp;')
-			.replace(/</g, '&lt;')
-			.replace(/>/g, '&gt;');
+		const htmlBody = this.renderMarkdown(body);
 		return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -96,20 +94,92 @@ export class ContextWebviewViewProvider implements vscode.WebviewViewProvider {
 		font-size: 13px;
 		margin: 0 0 6px 0;
 	}
-	pre {
-		white-space: pre-wrap;
-		word-wrap: break-word;
-		font-family: var(--vscode-editor-font-family);
-		font-size: var(--vscode-editor-font-size);
-		line-height: 1.4;
-	}
+	.markdown-body { line-height: 1.5; }
+	.markdown-body h1, .markdown-body h2, .markdown-body h3 { margin: 12px 0 6px; }
+	.markdown-body p { margin: 6px 0; }
+	.markdown-body ul { padding-left: 20px; }
+	.markdown-body code { background: rgba(127,127,127,0.12); padding: 0 3px; border-radius: 3px; }
+	.markdown-body pre { background: rgba(127,127,127,0.12); padding: 8px; border-radius: 6px; overflow: auto; }
+	.markdown-body pre code { background: transparent; padding: 0; }
 </style>
 <title>${title}</title>
 </head>
 <body>
 <h2>${title}</h2>
-<pre>${escapedBody}</pre>
+<div class="markdown-body">${htmlBody}</div>
 </body>
 </html>`;
+	}
+
+	// Minimal Markdown -> HTML converter (headings, lists, code, links, emphasis)
+	private renderMarkdown(src: string): string {
+		let text = (src ?? '').replace(/\r\n/g, '\n');
+
+		// Escape HTML first
+		const escapeHtml = (s: string) => s
+			.replace(/&/g, '&amp;')
+			.replace(/</g, '&lt;')
+			.replace(/>/g, '&gt;')
+			.replace(/\"/g, '&quot;');
+
+		text = escapeHtml(text);
+
+		// Preserve fenced code blocks using placeholders to avoid later transforms inside
+		const codeBlocks: string[] = [];
+		text = text.replace(/```(\w+)?\n([\s\S]*?)```/g, (_m, lang: string | undefined, code: string) => {
+			const idx = codeBlocks.length;
+			const cls = lang ? ` class="language-${lang}"` : '';
+			codeBlocks.push(`<pre><code${cls}>${code.replace(/\n$/,'')}</code></pre>`);
+			return `@@CODEBLOCK_${idx}@@`;
+		});
+
+		// Headings (# to ######)
+		for (let level = 6; level >= 1; level--) {
+			const re = new RegExp(`^${'#'.repeat(level)}\\s+(.+)$`, 'gm');
+			text = text.replace(re, (_m, g1) => `<h${level}>${g1.trim()}</h${level}>`);
+		}
+
+		// Inline code (after escaping)
+		text = text.replace(/`([^`]+)`/g, (_m, g1) => `<code>${g1}</code>`);
+
+		// Bold and italic
+		text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+		text = text.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+
+		// Links [text](url)
+		text = text.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_m, label, url) => {
+			return `<a href="${url}" target="_blank" rel="noopener">${label}</a>`;
+		});
+
+		// Simple lists: convert lines starting with - or *
+		const lines = text.split('\n');
+		const out: string[] = [];
+		let inList = false;
+		for (const line of lines) {
+			const m = line.match(/^\s*[-*]\s+(.*)$/);
+			if (m) {
+				if (!inList) { out.push('<ul>'); inList = true; }
+				out.push(`<li>${m[1]}</li>`);
+			} else {
+				if (inList) { out.push('</ul>'); inList = false; }
+				out.push(line);
+			}
+		}
+		if (inList) out.push('</ul>');
+		text = out.join('\n');
+
+		// Paragraphs: wrap plain text blocks not already HTML blocks
+		const blocks = text.split(/\n{2,}/);
+		const rendered = blocks.map(b => {
+			const trimmed = b.trim();
+			if (!trimmed) return '';
+			if (/^\s*<\/?(h\d|ul|li|pre|code|blockquote)/i.test(trimmed)) {
+				return trimmed;
+			}
+			return `<p>${trimmed.replace(/\n/g, '<br/>')}</p>`;
+		}).join('\n');
+
+		// Restore code blocks
+		return rendered.replace(/@@CODEBLOCK_(\d+)@@/g, (_m, i) => codeBlocks[Number(i)] ?? '');
 	}
 }
