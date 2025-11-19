@@ -6,7 +6,7 @@ export async function inferKindFromHover(
 	commands: typeof vscode.commands
 ): Promise<vscode.SymbolKind | undefined> {
 	try {
-		const hover = await commands.executeCommand<any>('_executeHoverProvider', rootUri, position);
+		const hover = await commands.executeCommand<any>('vscode.executeHoverProvider', rootUri, position);
 		const contents = hover?.[0]?.contents ?? [];
 		if (!contents.length) {
 			return undefined;

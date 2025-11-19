@@ -25,9 +25,9 @@ export async function getUsageContext(node: RichNode): Promise<string> {
 }
 
 async function renderCallers(callers: Caller[]): Promise<string[]> {
-		if (!callers.length) {
-			return [];
-		}
+	if (!callers.length) {
+		return [];
+	}
 	const parts: string[] = ['=== Callers ==='];
 	const limit = Math.min(3, callers.length);
 	for (let i = 0; i < limit; i++) {
@@ -40,28 +40,40 @@ async function renderCallers(callers: Caller[]): Promise<string[]> {
 		parts.push(renderFileSlice(doc, start, end));
 		parts.push('');
 	}
-		if (callers.length > limit) {
-			parts.push(`... and ${callers.length - limit} more caller(s)`);
-		}
+	if (callers.length > limit) {
+		parts.push(`... and ${callers.length - limit} more caller(s)`);
+	}
 	return parts;
 }
 
 async function renderReferences(refs: ReferenceWithPreview[]): Promise<string[]> {
-		if (!refs.length) {
-			return [];
-		}
+	if (!refs.length) {
+		return [];
+	}
 	const parts: string[] = ['=== References ==='];
 	const limit = Math.min(10, refs.length);
 	for (let i = 0; i < limit; i++) {
 		const ref = refs[i];
 		const range = ref.location.range;
-		const doc = await vscode.workspace.openTextDocument(ref.location.uri);
 		parts.push(`Reference ${i + 1}: ${ref.location.uri.fsPath}:${range.start.line + 1}`);
+		if (ref.codePreview) {
+			parts.push(ref.codePreview.fullLine);
+			parts.push(makePointer(ref.codePreview.matchStart, ref.codePreview.matchEnd));
+			parts.push('');
+			continue;
+		}
+		const doc = await vscode.workspace.openTextDocument(ref.location.uri);
 		parts.push(renderFileSlice(doc, Math.max(0, range.start.line - 4), range.end.line + 4));
 		parts.push('');
 	}
-		if (refs.length > limit) {
-			parts.push(`... and ${refs.length - limit} more reference(s)`);
-		}
+	if (refs.length > limit) {
+		parts.push(`... and ${refs.length - limit} more reference(s)`);
+	}
 	return parts;
+}
+
+function makePointer(start: number, end: number): string {
+	const safeStart = Math.max(0, start);
+	const width = Math.max(1, end - start);
+	return `${' '.repeat(safeStart)}${'^'.repeat(width)}`;
 }

@@ -1,17 +1,22 @@
 import * as vscode from 'vscode';
-import { RichNodeBacking, OutlineElement, ReferenceWithPreview, Caller, ServiceRegistry } from './types';
-import { containsPosition, makeIdFromRange } from './utils/rangeUtils';
+import { Caller, OutlineElement, RawWord, ReferenceWithPreview, RichNodeBacking, ServiceRegistry } from './types';
+import { makeIdFromRange } from './utils/rangeUtils';
 
 export class RichNode {
+	private resolvedOutline?: OutlineElement;
+
 	constructor(private readonly backing: RichNodeBacking, private readonly services: ServiceRegistry) {}
 
+	private isOutlineBacking(backing: RichNodeBacking): backing is OutlineElement {
+		return (backing as OutlineElement).symbol !== undefined;
+	}
+
 	getCacheKey(): string {
-		if (this.hasOutlineElement()) {
-			return this.getOutlineElement().id;
+		if (this.isOutlineBacking(this.backing)) {
+			return this.backing.id;
 		}
-		const loc = (this.backing as any).location;
-		const range: vscode.Range = loc.range;
-		return `${(this.backing as any).word}:${loc.uri.toString()}:${makeIdFromRange(range)}`;
+		const raw = this.getRawWord();
+		return `raw:${raw.word}:${raw.location.uri.toString()}:${makeIdFromRange(raw.location.range)}`;
 	}
 
 	equals(other: RichNode): boolean {
@@ -19,52 +24,64 @@ export class RichNode {
 	}
 
 	getName(): string {
-		return this.hasOutlineElement() ? this.getOutlineElement().symbol.name : (this.backing as any).word;
+		return this.isOutlineBacking(this.backing) ? this.backing.symbol.name : this.getRawWord().word;
 	}
 
 	getSelectionRange(): vscode.Range {
-		return this.hasOutlineElement()
-			? this.getOutlineElement().symbol.selectionRange ?? this.getOutlineElement().symbol.range
-			: (this.backing as any).location.range;
+		return this.isOutlineBacking(this.backing)
+			? this.backing.symbol.selectionRange ?? this.backing.symbol.range
+			: this.getRawWord().location.range;
 	}
 
 	getRange(): vscode.Range {
-		return this.hasOutlineElement() ? this.getOutlineElement().symbol.range : (this.backing as any).location.range;
+		return this.isOutlineBacking(this.backing) ? this.backing.symbol.range : this.getRawWord().location.range;
 	}
 
 	getUri(): vscode.Uri {
-		return this.hasOutlineElement() ? this.getOutlineElement().uri : (this.backing as any).location.uri;
+		return this.isOutlineBacking(this.backing) ? this.backing.uri : this.getRawWord().location.uri;
 	}
 
 	getOutlineElement(): OutlineElement {
-		if (!this.hasOutlineElement()) {
+		const outline = this.getExistingOutline();
+		if (!outline) {
 			throw new Error('Not an outline element');
 		}
-		return this.backing as OutlineElement;
+		return outline;
 	}
 
 	hasOutlineElement(): boolean {
-		return (this.backing as OutlineElement).symbol !== undefined;
+		return this.getExistingOutline() !== undefined;
 	}
 
-	getSymbolKind(): Promise<vscode.SymbolKind> {
-		return this.hasOutlineElement()
-			? this.services.lsp.getSymbolKind(this.getOutlineElement())
-			: Promise.resolve(vscode.SymbolKind.Function);
+	async getSymbolKind(): Promise<vscode.SymbolKind> {
+		const outline = await this.ensureOutlineElement();
+		if (outline) {
+			return this.services.lsp.getSymbolKind(outline);
+		}
+		const raw = this.getRawWord();
+		return this.services.lsp.getSymbolKindFromHover(raw.location.uri, raw.location.range.start);
 	}
 
 	getTrace() {
 		return this.services.trace.getTrace(this);
 	}
 
-	getReferences(): Promise<ReferenceWithPreview[]> {
-		return this.hasOutlineElement()
-			? this.services.lsp.getReferences(this.getOutlineElement())
-			: Promise.resolve([]);
+	async getReferences(): Promise<ReferenceWithPreview[]> {
+		const outline = await this.ensureOutlineElement();
+		if (outline) {
+			return this.services.lsp.getReferences(outline);
+		}
+		return this.services.lsp.getReferencesAtPosition(this.getUri(), this.getRange().start);
 	}
 
-	getCallers(): Promise<Caller[]> {
-		return this.hasOutlineElement() ? this.services.lsp.getCallers(this.getOutlineElement()) : Promise.resolve([]);
+	async getCallers(): Promise<Caller[]> {
+		const outline = await this.ensureOutlineElement();
+		if (outline) {
+			return this.services.lsp.getCallers(outline);
+		}
+		const raw = this.getRawWord();
+		const syntheticOutline = this.createSyntheticOutline(raw);
+		return this.services.lsp.getCallersAtPosition(raw.location.uri, raw.location.range.start, syntheticOutline);
 	}
 
 	getGrepContext(): Promise<string> {
@@ -98,4 +115,74 @@ export class RichNode {
 	getSymbolKindText(): Promise<string> {
 		return this.services.nodeContext.getSymbolKindText(this);
 	}
+
+	async ensureOutlineElement(): Promise<OutlineElement | undefined> {
+		const existing = this.getExistingOutline();
+		if (existing) {
+			return existing;
+		}
+		const raw = this.getRawWord();
+		try {
+			const defs = await this.services.lsp.getDefinitions(raw.location.uri, raw.location.range.start, 1);
+			const first = Array.isArray(defs) ? defs[0] : defs;
+			const normalized = normalizeDefinitionTarget(first);
+			if (!normalized) {
+				return undefined;
+			}
+			const resolved = await this.services.lsp.getOutlineElementFromPosition(normalized.uri, normalized.position);
+			if (resolved) {
+				this.resolvedOutline = resolved;
+				return resolved;
+			}
+		} catch {
+			// ignore and fall back to raw
+		}
+		return undefined;
+	}
+
+	private getExistingOutline(): OutlineElement | undefined {
+		if (this.isOutlineBacking(this.backing)) {
+			return this.backing;
+		}
+		return this.resolvedOutline;
+	}
+
+	private getRawWord(): RawWord {
+		if (this.isOutlineBacking(this.backing)) {
+			throw new Error('Not a raw word');
+		}
+		return this.backing as RawWord;
+	}
+
+	private createSyntheticOutline(raw: RawWord): OutlineElement {
+		const range = raw.location.range;
+		const symbol = new vscode.DocumentSymbol(raw.word, '', vscode.SymbolKind.Variable, range, range);
+		symbol.children = [];
+		return {
+			id: `raw:${raw.word}:${raw.location.uri.toString()}:${makeIdFromRange(range)}`,
+			symbol,
+			children: [],
+			uri: raw.location.uri
+		};
+	}
+}
+
+function normalizeDefinitionTarget(
+	value: vscode.Location | vscode.LocationLink | undefined
+): { uri: vscode.Uri; position: vscode.Position } | undefined {
+	if (!value) {
+		return undefined;
+	}
+	if (isLocationLink(value)) {
+		const targetRange = value.targetSelectionRange ?? value.targetRange;
+		return targetRange ? { uri: value.targetUri, position: targetRange.start } : undefined;
+	}
+	if (!value.range) {
+		return undefined;
+	}
+	return { uri: value.uri, position: value.range.start };
+}
+
+function isLocationLink(value: vscode.Location | vscode.LocationLink): value is vscode.LocationLink {
+	return (value as vscode.LocationLink).targetUri !== undefined;
 }

@@ -3,33 +3,32 @@
   "displayName": "context-code-text",
   "description": "",
   "version": "0.0.1",
+  "publisher": "cometix",
   "engines": {
     "vscode": "^1.103.1"
   },
   "categories": [
     "Other"
   ],
-  "activationEvents": [
-    "onCommand:context-code-text.showSymbolContext"
-  ],
+  "activationEvents": [],
   "main": "./dist/extension.js",
+  "enabledApiProposals": [
+    "findTextInFiles",
+    "findTextInFiles2"
+  ],
   "contributes": {
     "commands": [
       {
-        "command": "context-code-text.helloWorld",
-        "title": "Hello World"
-      },
-      {
-        "command": "context-code-text.showSymbolContext",
-        "title": "Show Symbol Context"
+        "command": "context-code-text.showContexts",
+        "title": "Show Contexts"
       }
     ],
     "menus": {
       "editor/context": [
         {
-          "command": "context-code-text.showSymbolContext",
+          "command": "context-code-text.showContexts",
           "group": "navigation@9",
-          "when": "editorHasSelection"
+          "when": "contextCodeText.hasOutlineContext"
         }
       ]
     }

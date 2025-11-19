@@ -7,7 +7,7 @@ export function registerCommands(nodeCreator: NodeCreatorService): vscode.Dispos
 		vscode.window.showInformationMessage('Hello World from context-code-text!');
 	});
 
-	const show = vscode.commands.registerCommand('context-code-text.showSymbolContext', async () => {
+	const show = vscode.commands.registerCommand('context-code-text.showContexts', async () => {
 		const editor = vscode.window.activeTextEditor;
 		if (!editor) {
 			vscode.window.showErrorMessage('No active editor for symbol context.');

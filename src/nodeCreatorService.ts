@@ -24,25 +24,27 @@ export class NodeCreatorService {
 		const doc = await vscode.workspace.openTextDocument(uri);
 		const wordRange = doc.getWordRangeAtPosition(pos);
 		if (!wordRange) {
+			console.debug('[context-code-text] NodeCreatorService: No word range at position');
 			return;
 		}
-		const word = doc.getText(wordRange);
-
-		const def = await this.tryGetDefinition(uri, pos);
-		if (!def) {
-			return new RichNode(
-				{ word, location: { uri, range: new vscode.Range(wordRange.start, wordRange.end) } },
-				services
-			);
-		}
-
-		const outline = await this.tryGetOutline(def.uri, def.pos);
+		const caretPos = wordRange.start;
+		const outline = await this.resolveOutline(uri, caretPos);
 		if (outline) {
 			return new RichNode(outline, services);
 		}
-
+		console.debug('[context-code-text] NodeCreatorService: Failed to resolve outline element, falling back to raw word');
+		const word = doc.getText(wordRange);
+		if (!word?.length) {
+			return undefined;
+		}
 		return new RichNode(
-			{ word, location: { uri, range: new vscode.Range(wordRange.start, wordRange.end) } },
+			{
+				word,
+				location: {
+					uri,
+					range: wordRange
+				}
+			},
 			services
 		);
 	}
@@ -51,46 +53,69 @@ export class NodeCreatorService {
 		return new RichNode(elem, this.ensureServices());
 	}
 
-	private async tryGetDefinition(
-		uri: vscode.Uri,
-		pos: vscode.Position
-	): Promise<{ uri: vscode.Uri; pos: vscode.Position } | undefined> {
+	private async resolveOutline(uri: vscode.Uri, pos: vscode.Position) {
+		// Prefer going through definition to resolve the canonical symbol, then map to its document symbols.
+		const normalized = await this.tryNormalizeDefinition(uri, pos);
+		if (normalized?.position) {
+			const outline = await this.tryGetOutline(normalized.uri, normalized.position);
+			if (outline) {
+				return outline;
+			}
+			console.debug('[context-code-text] NodeCreatorService: Outline lookup at definition location failed');
+		} else {
+			console.debug('[context-code-text] NodeCreatorService: Definition lookup returned no result');
+		}
+		// Fallback: try outline in the current document at the caret position.
+		const fallback = await this.tryGetOutline(uri, pos);
+		if (!fallback) {
+			console.debug('[context-code-text] NodeCreatorService: Outline lookup at caret position failed');
+		}
+		return fallback;
+	}
+
+	private async tryNormalizeDefinition(uri: vscode.Uri, pos: vscode.Position): Promise<
+		| {
+				uri: vscode.Uri;
+				position: vscode.Position;
+		  }
+		| undefined
+	> {
 		try {
 			const defs = await this.lsp.getDefinitions(uri, pos, 300);
 			const first = Array.isArray(defs) ? defs[0] : defs;
-			if (first) {
-				if (isLocationLink(first)) {
-					const targetRange = first.targetSelectionRange ?? first.targetRange;
-					if (targetRange) {
-						return { uri: first.targetUri, pos: targetRange.start };
-					}
-				} else {
-					return { uri: first.uri, pos: first.range.start };
-				}
+			if (!first) {
+				return undefined;
 			}
-		} catch {
-			// ignore
+			if (isLocationLink(first)) {
+				const targetRange = first.targetSelectionRange ?? first.targetRange;
+				return targetRange ? { uri: first.targetUri, position: targetRange.start } : undefined;
+			}
+			if (!first.range) {
+				return undefined;
+			}
+			return { uri: first.uri, position: first.range.start };
+		} catch (err) {
+			console.debug('[context-code-text] NodeCreatorService: Definition lookup threw', err);
+			return undefined;
 		}
-		return undefined;
 	}
 
-	private async tryGetOutline(uri: vscode.Uri, pos: vscode.Position) {
+	private async tryGetOutline(uri: vscode.Uri, pos?: vscode.Position) {
+		if (!pos) {
+			return undefined;
+		}
 		try {
 			const outline = await this.lsp.getOutlineElementFromPosition(uri, pos);
 			if (outline) {
-				const sel = outline.symbol.selectionRange ?? outline.symbol.range;
-				if (sel.contains(pos)) {
-					return outline;
-				}
 				return outline;
 			}
-		} catch {
-			// ignore
+		} catch (err) {
+			console.debug('[context-code-text] NodeCreatorService: Outline lookup threw', err);
 		}
 		return undefined;
 	}
 }
 
-function isLocationLink(value: vscode.Definition | vscode.Location | vscode.LocationLink): value is vscode.LocationLink {
+function isLocationLink(value: vscode.Location | vscode.LocationLink): value is vscode.LocationLink {
 	return (value as vscode.LocationLink).targetUri !== undefined;
 }

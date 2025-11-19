@@ -36,7 +36,7 @@ async function inferFromDefinitions(
 		if (!link) {
 			return undefined;
 		}
-		const symbols = await commands.executeCommand<any>('_executeDocumentSymbolProvider', link.targetUri);
+		const symbols = await commands.executeCommand<any>('vscode.executeDocumentSymbolProvider', link.targetUri);
 		if (!symbols?.length) {
 			return undefined;
 		}
@@ -53,7 +53,7 @@ async function inferFromDocumentSymbols(
 	commands: typeof vscode.commands
 ): Promise<vscode.SymbolKind | undefined> {
 	try {
-		const symbols = await commands.executeCommand<any>('_executeDocumentSymbolProvider', rootUri);
+		const symbols = await commands.executeCommand<any>('vscode.executeDocumentSymbolProvider', rootUri);
 		if (!symbols?.length) {
 			return undefined;
 		}
