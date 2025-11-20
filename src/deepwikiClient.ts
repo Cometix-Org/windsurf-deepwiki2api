@@ -235,7 +235,9 @@ function parseDeepwikiResponses(data: Uint8Array): string {
 	channel.appendLine('[DeepWiki] Raw response bytes length: ' + data.length);
 	channel.appendLine('[DeepWiki] Raw response hex (first 4096): ' + Buffer.from(data).toString('hex').slice(0, 4096));
 	channel.appendLine('[DeepWiki] Raw response base64 (first 4096): ' + Buffer.from(data).toString('base64').slice(0, 4096));
-	const deltas: string[] = [];
+	const articleParts: string[] = [];
+	const followupParts: string[] = [];
+	let isArticleDoneSeen = false;
 	let offset = 0;
 	let frameIndex = 0;
 	while (offset + 5 <= data.length) {
@@ -284,23 +286,46 @@ function parseDeepwikiResponses(data: Uint8Array): string {
 		}
 
 		// 非 JSON：使用生成的 protobuf 解码 text_delta
-		let text: string | undefined;
         try {
             const reader = new BinaryReader(uncompressedBuf);
             const msg = PBGetDeepWikiResponse.internalBinaryRead(reader, uncompressedBuf.length, {
                 readUnknownField: false,
                 readerFactory: (bytes: Uint8Array) => new BinaryReader(bytes)
             } as any);
-            text = msg.response?.textDelta;
+            const text = msg.response?.textDelta ?? '';
+            const convId = msg.response?.conversationId ?? '';
+            const isFollowup = /-followup$/i.test(convId);
+            const followupQuestions = (msg as any).followupQuestions as string | undefined;
+            if (typeof msg.isArticleDone === 'boolean' && msg.isArticleDone) {
+                isArticleDoneSeen = true;
+            }
+            channel.appendLine('[DeepWiki] Frame text_delta: ' + (text || '<none>'));
+            if (text) {
+                if (isFollowup) {
+                    followupParts.push(text);
+                } else {
+                    articleParts.push(text);
+                }
+            }
+            if (followupQuestions && followupQuestions.trim()) {
+                followupParts.push(followupQuestions);
+            }
         } catch {
-            text = undefined;
+            // ignore undecodable frames
         }
-		channel.appendLine('[DeepWiki] Frame text_delta: ' + (text ?? '<none>'));
-		if (text) {
-			deltas.push(text);
-		}
 	}
-	return deltas.join('');
+	const article = articleParts.join('');
+	const followupsRaw = followupParts.join('');
+	const items = followupsRaw.split(/\r?\n/).map(s => s.trim()).filter(s => s.length > 0);
+	const seen = new Set<string>();
+	const unique: string[] = [];
+	for (const it of items) { if (!seen.has(it)) { seen.add(it); unique.push(it); } }
+	if (unique.length === 0) {
+		return article;
+	}
+	channel.appendLine(`[DeepWiki] Collected follow-up questions: ${unique.length}`);
+	const section = ['','---','','后续提问', ...unique.map(q => `- ${q}`)].join('\n');
+	return article + '\n' + section;
 }
 
 // 已移除手写的 wire 扫描解析，全部改用生成的解码器

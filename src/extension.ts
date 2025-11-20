@@ -111,16 +111,30 @@ async function runStartupDeepwikiSmokeTest(): Promise<void> {
         // sanitize + ensure connect headers
         const headers: Record<string, string> = {};
         for (const [k, v] of Object.entries(headersIn)) {
-            if (!k || v == null) continue;
+            if (!k || v === null || v === undefined) {
+                continue;
+            }
             const kl = k.toLowerCase();
-            if (kl === 'content-length' || kl === 'host' || kl === 'connection' || kl === 'transfer-encoding') continue;
+            if (kl === 'content-length' || kl === 'host' || kl === 'connection' || kl === 'transfer-encoding') {
+                continue;
+            }
             headers[k] = String(v);
         }
-        if (!Object.keys(headers).some(k => k.toLowerCase() === 'content-type')) headers['content-type'] = 'application/connect+proto';
-        if (!Object.keys(headers).some(k => k.toLowerCase() === 'connect-protocol-version')) headers['connect-protocol-version'] = '1';
-        if (!Object.keys(headers).some(k => k.toLowerCase() === 'connect-content-encoding')) headers['connect-content-encoding'] = 'gzip';
-        if (!Object.keys(headers).some(k => k.toLowerCase() === 'connect-accept-encoding')) headers['connect-accept-encoding'] = 'gzip';
-        if (!Object.keys(headers).some(k => k.toLowerCase() === 'accept-encoding')) headers['accept-encoding'] = 'identity';
+        if (!Object.keys(headers).some(k => k.toLowerCase() === 'content-type')) {
+            headers['content-type'] = 'application/connect+proto';
+        }
+        if (!Object.keys(headers).some(k => k.toLowerCase() === 'connect-protocol-version')) {
+            headers['connect-protocol-version'] = '1';
+        }
+        if (!Object.keys(headers).some(k => k.toLowerCase() === 'connect-content-encoding')) {
+            headers['connect-content-encoding'] = 'gzip';
+        }
+        if (!Object.keys(headers).some(k => k.toLowerCase() === 'connect-accept-encoding')) {
+            headers['connect-accept-encoding'] = 'gzip';
+        }
+        if (!Object.keys(headers).some(k => k.toLowerCase() === 'accept-encoding')) {
+            headers['accept-encoding'] = 'identity';
+        }
 
         // Build protobuf from JSON via generated types
         const message: PBGetDeepWikiRequest = {
@@ -161,7 +175,9 @@ async function runStartupDeepwikiSmokeTest(): Promise<void> {
 
         ch.appendLine('[StartupTest] URL: ' + url);
         ch.appendLine('[StartupTest] Headers:');
-        for (const [k, v] of Object.entries(headers)) ch.appendLine(`  ${k}: ${v}`);
+        for (const [k, v] of Object.entries(headers)) {
+            ch.appendLine(`  ${k}: ${v}`);
+        }
         ch.appendLine('[StartupTest] Body bytes: ' + frame.length);
 
         const doFetch: any = (globalThis as any).fetch;
@@ -227,7 +243,9 @@ async function runStartupDeepwikiSmokeTest(): Promise<void> {
                 const progress = (msg as any).progress ?? (msg.response as any)?.progress;
                 ch.appendLine('[StartupTest]   protobuf decoded:');
                 ch.appendLine('      modelType=' + String(modelType) + ' progress=' + String(progress));
-                if (td) ch.appendLine('      text_delta (first 500): ' + td.slice(0, 500));
+                if (td) {
+                    ch.appendLine('      text_delta (first 500): ' + td.slice(0, 500));
+                }
             } catch (e) {
                 ch.appendLine('[StartupTest]   protobuf decode failed: ' + (e as any)?.message);
             }

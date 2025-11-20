@@ -1,6 +1,10 @@
 import typescriptEslint from "typescript-eslint";
 
-export default [{
+export default [
+{
+    ignores: ["src/generated/**"],
+},
+{
     files: ["**/*.ts"],
 }, {
     plugins: {

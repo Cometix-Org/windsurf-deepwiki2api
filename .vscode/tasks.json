@@ -41,6 +41,16 @@
                 "reveal": "never"
             }
         },
+		{
+            "type": "npm",
+            "script": "package:vsix",
+            "label": "npm: package:vsix",
+            "group": "build",
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always"
+            }
+        },
 
 	]
 }

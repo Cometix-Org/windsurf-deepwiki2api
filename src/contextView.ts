@@ -165,14 +165,18 @@ export class ContextWebviewViewProvider implements vscode.WebviewViewProvider {
 				out.push(line);
 			}
 		}
-		if (inList) out.push('</ul>');
+		if (inList) {
+			out.push('</ul>');
+		}
 		text = out.join('\n');
 
 		// Paragraphs: wrap plain text blocks not already HTML blocks
 		const blocks = text.split(/\n{2,}/);
 		const rendered = blocks.map(b => {
 			const trimmed = b.trim();
-			if (!trimmed) return '';
+			if (!trimmed) {
+				return '';
+			}
 			if (/^\s*<\/?(h\d|ul|li|pre|code|blockquote)/i.test(trimmed)) {
 				return trimmed;
 			}
