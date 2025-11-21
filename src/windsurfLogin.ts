@@ -220,6 +220,8 @@ async function callGetUserJwt(baseUrl: string, apiKey: string): Promise<string> 
 }
 
 export async function runWindsurfLogin(): Promise<void> {
+	const url = 'https://windsurf.com/editor/show-auth-token?response_type=token&redirect_uri=windsurf%3A%2F%2Fcodeium.windsurf&prompt=login&redirect_parameters_type=fragment&workflow=onboarding&authType=signin&from=redirect';
+	vscode.env.openExternal(vscode.Uri.parse(url));
 	const reg = await promptRegistrationCode();
 	if (!reg) {
 		return;
