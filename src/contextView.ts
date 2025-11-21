@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { NodeCreatorService } from './nodeCreatorService';
-import { fetchDeepwikiArticle } from './deepwikiClient';
+import { streamDeepwikiArticle, DeepwikiStreamMessage } from './deepwikiClient';
 
 export class ContextWebviewViewProvider implements vscode.WebviewViewProvider {
 	private view: vscode.WebviewView | undefined;
@@ -10,7 +10,7 @@ export class ContextWebviewViewProvider implements vscode.WebviewViewProvider {
 	public resolveWebviewView(webviewView: vscode.WebviewView): void {
 		this.view = webviewView;
     	webviewView.webview.options = {
-			enableScripts: false
+			enableScripts: true
 		};
 		webviewView.webview.html = this.renderHtml('Context Code Text', '将光标移动到代码中的一个符号上以查看 DeepWiki 结果。');
 		void this.updateForEditor(vscode.window.activeTextEditor ?? undefined);
@@ -65,7 +65,38 @@ export class ContextWebviewViewProvider implements vscode.WebviewViewProvider {
 
 			const symbolType = rich.getSymbolKind ? await rich.getSymbolKind() : 0;
 
-			const article = await fetchDeepwikiArticle({
+			const header = `符号: ${name}\n位置: ${location}\n\n`;
+			// 初始化带脚本的页面，后续通过 postMessage 追加内容
+			this.view.webview.html = this.renderHtml('DeepWiki', header + '（流式加载中…）');
+
+			let followupBuffer = '';
+			let articleText = '';
+
+			const renderState = () => {
+				if (!this.view) {
+					return;
+				}
+				const items = followupBuffer
+					.split(/\r?\n/)
+					.map(s => s.trim())
+					.filter(Boolean);
+				const seen = new Set<string>();
+				const unique: string[] = [];
+				for (const it of items) {
+					if (!seen.has(it)) {
+						seen.add(it);
+						unique.push(it);
+					}
+				}
+				const followups = unique.length > 0
+					? ['','---','','后续提问', ...unique.map(q => `- ${q}`)].join('\n')
+					: '';
+				const body = followups ? `${header}${articleText}\n${followups}` : `${header}${articleText}`;
+				const html = this.renderMarkdown(body);
+				void this.view.webview.postMessage({ type: 'replace', html });
+			};
+
+			await streamDeepwikiArticle({
 				symbolName: name,
 				symbolUri: doc.uri.toString(),
 				symbolType,
@@ -74,10 +105,19 @@ export class ContextWebviewViewProvider implements vscode.WebviewViewProvider {
 				traceContext: traceContext ?? undefined,
 				quickGrepContext: quickGrepContext ?? undefined,
 				fullGrepContext: fullGrepContext ?? undefined
+			}, (m: DeepwikiStreamMessage) => {
+				if (!this.view) return;
+				if (m.type === 'article' && (m as any).text) {
+					articleText += String((m as any).text);
+					renderState();
+				} else if (m.type === 'followup' && (m as any).text) {
+					followupBuffer += String((m as any).text);
+					renderState();
+				} else if (m.type === 'done') {
+					renderState();
+				}
 			});
-
-			const header = `符号: ${name}\n位置: ${location}\n\n`;
-			this.view.webview.html = this.renderHtml('DeepWiki', header + article);
+			renderState();
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
 			
@@ -123,6 +163,23 @@ export class ContextWebviewViewProvider implements vscode.WebviewViewProvider {
 <body>
 <h2>${title}</h2>
 <div class="markdown-body">${htmlBody}</div>
+<script>
+// 接收扩展端 postMessage，流式追加或替换 HTML 片段
+window.addEventListener('message', (event) => {
+  const msg = event.data || {};
+  const container = document.querySelector('.markdown-body');
+  if (!container) return;
+  if (msg.type === 'append' && msg.html) {
+    const wrapper = document.createElement('div');
+    wrapper.innerHTML = msg.html;
+    while (wrapper.firstChild) {
+      container.appendChild(wrapper.firstChild);
+    }
+  } else if (msg.type === 'replace' && msg.html) {
+    container.innerHTML = msg.html;
+  }
+});
+</script>
 </body>
 </html>`;
 	}
