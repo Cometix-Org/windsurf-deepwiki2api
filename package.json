@@ -91,7 +91,7 @@
     "watch:esbuild": "node esbuild.js --watch",
     "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
     "package": "pnpm run check-types && pnpm run lint && node esbuild.js --production",
-    "package:vsix": "pnpm run package && vsce package --out dist/context-code-text.vsix",
+    "package:vsix": "pnpm run package && vsce package --no-dependencies --out dist/context-code-text.vsix",
     "check-types": "tsc --noEmit",
     "lint": "eslint src"
   },

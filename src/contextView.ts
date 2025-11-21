@@ -25,6 +25,14 @@ export class ContextWebviewViewProvider implements vscode.WebviewViewProvider {
 			return;
 		}
 
+		// 自动聚焦到面板
+		try {
+			await vscode.commands.executeCommand('workbench.view.extension.contextCodeText');
+			await vscode.commands.executeCommand('contextCodeText.contextView.focus');
+		} catch (error) {
+			// 如果聚焦失败，继续执行其他逻辑
+		}
+
 		const doc = editor.document;
 		const selection = editor.selection;
 		const pos = selection.isEmpty ? selection.active : selection.start;
@@ -72,7 +80,15 @@ export class ContextWebviewViewProvider implements vscode.WebviewViewProvider {
 			this.view.webview.html = this.renderHtml('DeepWiki', header + article);
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
-			this.view.webview.html = this.renderHtml('Error', `DeepWiki 请求失败或解析出错：\n${message}`);
+			
+			// Special handling for LSP unavailable error
+			if (message.includes('LSP is not available') || message.includes('Cannot get definitions: LSP is not available')) {
+				this.view.webview.html = this.renderHtml('LSP 服务不可用', 
+					`LSP (Language Server Protocol) 服务当前不可用。\n\n可能的原因：\n• 当前文件类型不支持 LSP 服务\n• LSP 服务器未启动或崩溃\n• 扩展配置问题\n\n建议的解决方案：\n• 检查是否安装了对应语言的 LSP 扩展\n• 重新 VS Code 或重启 LSP 服务\n• 尝试在其他支持的文件中使用\n\n错误详情：\n${message}`
+				);
+			} else {
+				this.view.webview.html = this.renderHtml('Error', `DeepWiki 请求失败或解析出错：\n${message}`);
+			}
 		}
 	}
 
