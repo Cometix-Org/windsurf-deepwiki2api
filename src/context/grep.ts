@@ -8,34 +8,32 @@ const MAX_GREP_CHARS = 200;
 export async function runGrep(node: RichNode, mode: 'quick' | 'full'): Promise<string> {
 	try {
 		const symbol = node.getName();
-		const finder: undefined | ((
-			query: { pattern: string },
-			options: Record<string, unknown>,
-			callback: (result: { uri: vscode.Uri; ranges: readonly vscode.Range[] }) => void
-		) => Thenable<void>) = (vscode.workspace as any).findTextInFiles;
-		if (!finder) {
-			return `Grep is not supported in this version of VS Code.`;
-		}
 		const workspaceFolder = vscode.workspace.getWorkspaceFolder(node.getUri());
 		const title = mode === 'quick' ? `=== Quick Grep Results for '${symbol}' ===` : `=== Grep Results for '${symbol}' ===`;
 		const scopeDescription = mode === 'quick' ? 'Quick search (parent folder only)' : 'Full workspace search';
 		const matches: { resource: vscode.Uri; range: vscode.Range }[] = [];
 
-		const options: Record<string, unknown> = {
-			include: mode === 'quick' && workspaceFolder ? new vscode.RelativePattern(workspaceFolder, '**/*') : undefined,
-			useDefaultExcludes: true
-		};
-
-		await finder.call(
-			vscode.workspace,
-			{ pattern: symbol },
-			options,
-			(result: { uri: vscode.Uri; ranges: readonly vscode.Range[] }) => {
-				for (const range of result.ranges) {
-					matches.push({ resource: result.uri, range });
+		const include = mode === 'quick' && workspaceFolder ? new vscode.RelativePattern(workspaceFolder, '**/*') : '**/*';
+		const exclude = '{**/node_modules/**,**/dist/**,**/out/**,**/.git/**}';
+		
+		const files = await vscode.workspace.findFiles(include, exclude, 10000);
+		
+		for (const file of files) {
+			try {
+				const doc = await vscode.workspace.openTextDocument(file);
+				const text = doc.getText();
+				const escapedSymbol = symbol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+				const regex = new RegExp(escapedSymbol, 'g');
+				let match;
+				while ((match = regex.exec(text)) !== null) {
+					const position = doc.positionAt(match.index);
+					const range = new vscode.Range(position, doc.positionAt(match.index + symbol.length));
+					matches.push({ resource: file, range });
 				}
+			} catch (err) {
+				continue;
 			}
-		);
+		}
 
 		if (!matches.length) {
 			return `No grep results found for '${symbol}'.`;

@@ -17,10 +17,6 @@
     "onCommand:context-code-text.showDeepWiki"
   ],
   "main": "./dist/extension.js",
-  "enabledApiProposals": [
-    "findTextInFiles",
-    "findTextInFiles2"
-  ],
   "contributes": {
     "viewsContainers": {
       "activitybar": [
