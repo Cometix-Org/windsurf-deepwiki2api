@@ -1,27 +1,272 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs';
+import * as path from 'path';
 import { NodeCreatorService } from './nodeCreatorService';
 import { streamDeepwikiArticle, DeepwikiStreamMessage } from './deepwikiClient';
+import { processMarkdownCodeBlocks } from './codeTokenizer';
+
+// Webview 状态类型定义（与 webview/src/types.ts 保持一致）
+interface WebviewState {
+	title: string;
+	symbolKindName: string;
+	symbolKind: number;
+	isLoading: boolean;
+	content: string;
+	followups: string[];
+	canGoPrev: boolean;
+	canGoNext: boolean;
+}
+
+interface HistoryEntry {
+	title: string;
+	symbolKindName: string;
+	symbolKind: number;
+	markdown: string;
+	followups: string[];
+	// 符号位置信息
+	filePath: string;
+	line: number;
+	// 上下文信息
+	fileContext?: string;
+	usageContext?: string;
+	traceContext?: string;
+	quickGrepContext?: string;
+	fullGrepContext?: string;
+}
 
 export class ContextWebviewViewProvider implements vscode.WebviewViewProvider {
 	private view: vscode.WebviewView | undefined;
+	private extensionUri: vscode.Uri;
+	private currentEditor: vscode.TextEditor | undefined;
+	private history: HistoryEntry[] = [];
+	private historyIndex: number = -1;
+	private currentArticle: string = '';
 
-	constructor(private readonly nodeCreator: NodeCreatorService) {}
+	constructor(
+		private readonly nodeCreator: NodeCreatorService,
+		extensionUri: vscode.Uri
+	) {
+		this.extensionUri = extensionUri;
+	}
 
 	public resolveWebviewView(webviewView: vscode.WebviewView): void {
 		this.view = webviewView;
-    	webviewView.webview.options = {
-			enableScripts: true
+		webviewView.webview.options = {
+			enableScripts: true,
+			localResourceRoots: [this.extensionUri]
 		};
-		webviewView.webview.html = this.renderHtml('Context Code Text', '将光标移动到代码中的一个符号上以查看 DeepWiki 结果。');
+		
+		// 加载 Vue webview
+		webviewView.webview.html = this.getWebviewHtml(webviewView.webview);
+		
+		// 处理来自 webview 的消息
+		webviewView.webview.onDidReceiveMessage(this.handleWebviewMessage.bind(this));
+		
+		// 初始化状态
+		this.sendInitState({
+			title: 'Context Code Text',
+			symbolKindName: '',
+			symbolKind: 0,
+			isLoading: false,
+			content: '将光标移动到代码中的一个符号上以查看 DeepWiki 结果。',
+			followups: [],
+			canGoPrev: false,
+			canGoNext: false
+		});
+		
 		void this.updateForEditor(vscode.window.activeTextEditor ?? undefined);
 	}
 
+	private handleWebviewMessage(message: { type: string; [key: string]: unknown }): void {
+		switch (message.type) {
+			case 'refresh':
+				void this.updateForEditor(this.currentEditor);
+				break;
+			case 'navigate':
+				this.handleNavigate(message.direction as 'prev' | 'next');
+				break;
+			case 'copyArticle':
+				this.copyCurrentArticle();
+				break;
+			case 'openFile':
+				void this.openFileAtLocation(
+					message.path as string,
+					message.startLine as number,
+					message.endLine as number
+				);
+				break;
+			case 'copyFollowup':
+				this.copyFollowupWithContext(message.question as string);
+				break;
+		}
+	}
+
+	private async openFileAtLocation(filePath: string, startLine: number, endLine: number): Promise<void> {
+		try {
+			const uri = vscode.Uri.file(filePath);
+			const doc = await vscode.workspace.openTextDocument(uri);
+			const editor = await vscode.window.showTextDocument(doc, {
+				preview: true,
+				preserveFocus: false
+			});
+			
+			// 创建选区并跳转
+			const startPos = new vscode.Position(Math.max(0, startLine - 1), 0);
+			const endPos = new vscode.Position(Math.max(0, endLine - 1), Number.MAX_SAFE_INTEGER);
+			const range = new vscode.Range(startPos, endPos);
+			
+			editor.selection = new vscode.Selection(startPos, endPos);
+			editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
+		} catch (err) {
+			void vscode.window.showErrorMessage(`无法打开文件: ${filePath}`);
+		}
+	}
+
+	public copyCurrentArticle(): void {
+		if (this.currentArticle) {
+			void vscode.env.clipboard.writeText(this.currentArticle);
+			void vscode.window.showInformationMessage('文章已复制到剪贴板');
+		} else {
+			void vscode.window.showWarningMessage('没有可复制的文章内容');
+		}
+	}
+
+	private copyFollowupWithContext(question: string): void {
+		const trimmed = String(question ?? '').trim();
+		if (!trimmed) {
+			void vscode.window.showWarningMessage('请输入 Follow-up 问题');
+			return;
+		}
+
+		const entry = this.history[this.historyIndex];
+
+		const lines: string[] = [];
+		if (entry) {
+			lines.push(
+				`${entry.filePath}:${entry.line}`,
+				`Symbol: ${entry.title}`
+			);
+			if (entry.symbolKindName) {
+				lines.push(`Kind: ${entry.symbolKindName}`);
+			}
+			lines.push('', trimmed);
+		} else {
+			lines.push(trimmed);
+		}
+
+		void vscode.env.clipboard.writeText(lines.join('\n'));
+
+		if (entry) {
+			void vscode.window.showInformationMessage('Follow-up 问题已复制到剪贴板，包含上下文信息');
+		} else {
+			void vscode.window.showInformationMessage('Follow-up 问题已复制到剪贴板');
+		}
+	}
+
+	private handleNavigate(direction: 'prev' | 'next'): void {
+		if (direction === 'prev' && this.historyIndex > 0) {
+			this.historyIndex--;
+			this.showHistoryEntry();
+		} else if (direction === 'next' && this.historyIndex < this.history.length - 1) {
+			this.historyIndex++;
+			this.showHistoryEntry();
+		}
+	}
+
+	private showHistoryEntry(): void {
+		const entry = this.history[this.historyIndex];
+		if (!entry) {return;}
+
+		this.currentArticle = entry.markdown;
+		this.sendInitState({
+			title: entry.title,
+			symbolKindName: entry.symbolKindName,
+			symbolKind: entry.symbolKind,
+			isLoading: false,
+			content: entry.markdown,
+			followups: entry.followups,
+			canGoPrev: this.historyIndex > 0,
+			canGoNext: this.historyIndex < this.history.length - 1
+		});
+	}
+
+	private pushHistory(entry: HistoryEntry): void {
+		// 如果当前不在历史末尾，删除后面的历史
+		if (this.historyIndex < this.history.length - 1) {
+			this.history = this.history.slice(0, this.historyIndex + 1);
+		}
+		this.history.push(entry);
+		this.historyIndex = this.history.length - 1;
+	}
+
+	private getNavigationState(): { canGoPrev: boolean; canGoNext: boolean } {
+		return {
+			canGoPrev: this.historyIndex > 0,
+			canGoNext: this.historyIndex < this.history.length - 1
+		};
+	}
+
+	private sendInitState(state: WebviewState): void {
+		void this.view?.webview.postMessage({ type: 'initState', state });
+	}
+
+	private sendUpdateContent(markdown: string, followups: string[]): void {
+		// 在发送前处理代码块，添加语法高亮
+		let processedMarkdown = processMarkdownCodeBlocks(markdown);
+		
+		// 替换图标占位符为 webview URI
+		processedMarkdown = this.replaceIconPlaceholders(processedMarkdown);
+		
+		void this.view?.webview.postMessage({ type: 'updateContent', markdown: processedMarkdown, followups });
+	}
+
+	/**
+	 * 替换 {{ICON:iconName}} 占位符为实际的 webview URI
+	 */
+	private replaceIconPlaceholders(html: string): string {
+		if (!this.view) {
+			return html;
+		}
+		
+		const webview = this.view.webview;
+		const iconCache = new Map<string, string>();
+		
+		return html.replace(/\{\{ICON:([^}]+)\}\}/g, (_, iconName: string) => {
+			// 使用缓存避免重复生成 URI
+			if (iconCache.has(iconName)) {
+				return iconCache.get(iconName)!;
+			}
+			
+			const iconUri = webview.asWebviewUri(
+				vscode.Uri.joinPath(this.extensionUri, 'assets', 'icons', `${iconName}.svg`)
+			);
+			const uriString = iconUri.toString();
+			iconCache.set(iconName, uriString);
+			return uriString;
+		});
+	}
+
+	private sendLoadingDone(): void {
+		void this.view?.webview.postMessage({ type: 'loadingDone' });
+	}
+
 	public async updateForEditor(editor: vscode.TextEditor | undefined): Promise<void> {
+		this.currentEditor = editor;
+		
 		if (!this.view) {
 			return;
 		}
 		if (!editor) {
-			this.view.webview.html = this.renderHtml('No active editor', '打开一个文件并将光标移动到一个符号上以查看 DeepWiki 结果。');
+			this.sendInitState({
+				title: 'No active editor',
+				symbolKindName: '',
+				symbolKind: 0,
+				isLoading: false,
+				content: '打开一个文件并将光标移动到一个符号上以查看 DeepWiki 结果。',
+				followups: [],
+				canGoPrev: false,
+				canGoNext: false
+			});
 			return;
 		}
 
@@ -29,7 +274,7 @@ export class ContextWebviewViewProvider implements vscode.WebviewViewProvider {
 		try {
 			await vscode.commands.executeCommand('workbench.view.extension.contextCodeText');
 			await vscode.commands.executeCommand('contextCodeText.contextView.focus');
-		} catch (error) {
+		} catch {
 			// 如果聚焦失败，继续执行其他逻辑
 		}
 
@@ -38,23 +283,51 @@ export class ContextWebviewViewProvider implements vscode.WebviewViewProvider {
 		const pos = selection.isEmpty ? selection.active : selection.start;
 		const wordRange = doc.getWordRangeAtPosition(pos);
 		if (!wordRange) {
-			this.view.webview.html = this.renderHtml('No symbol at cursor', '将光标移动到一个符号名称上以查看 DeepWiki 结果。');
+			this.sendInitState({
+				title: 'No symbol at cursor',
+				symbolKindName: '',
+				symbolKind: 0,
+				isLoading: false,
+				content: '将光标移动到一个符号名称上以查看 DeepWiki 结果。',
+				followups: [],
+				canGoPrev: false,
+				canGoNext: false
+			});
 			return;
 		}
 
 		const name = doc.getText(wordRange);
 		const location = `${doc.uri.fsPath}:${wordRange.start.line + 1}`;
 
-		this.view.webview.html = this.renderHtml('Loading…', `正在向 DeepWiki 请求符号 “${name}” 在 ${location} 的解释…`);
+		// 设置加载状态
+		this.sendInitState({
+			title: name,
+			symbolKindName: '',
+			symbolKind: 0,
+			isLoading: true,
+			content: `正在向 DeepWiki 请求符号 "${name}" 在 ${location} 的解释…`,
+			followups: [],
+			canGoPrev: false,
+			canGoNext: false
+		});
 
 		try {
 			const rich = await this.nodeCreator.getRichNode(doc.uri, wordRange.start);
 			if (!rich) {
-				this.view.webview.html = this.renderHtml('No rich node', '当前选择未能生成上下文信息。');
+				this.sendInitState({
+					title: 'No rich node',
+					symbolKindName: '',
+					symbolKind: 0,
+					isLoading: false,
+					content: '当前选择未能生成上下文信息。',
+					followups: [],
+					canGoPrev: false,
+					canGoNext: false
+				});
 				return;
 			}
 
-			const [fileContext, usageContext, traceContext, quickGrepContext, fullGrepContext, symbolKind] = await Promise.all([
+			const [fileContext, usageContext, traceContext, quickGrepContext, fullGrepContext, symbolKindText] = await Promise.all([
 				rich.getFileContext(),
 				rich.getUsageContext(),
 				rich.getTraceContext(),
@@ -65,36 +338,53 @@ export class ContextWebviewViewProvider implements vscode.WebviewViewProvider {
 
 			const symbolType = rich.getSymbolKind ? await rich.getSymbolKind() : 0;
 
-			const header = `符号: ${name}\n位置: ${location}\n\n`;
-			// 初始化带脚本的页面，后续通过 postMessage 追加内容
-			this.view.webview.html = this.renderHtml('DeepWiki', header + '（流式加载中…）');
-
 			let followupBuffer = '';
 			let articleText = '';
+			this.currentArticle = '';
+			let pendingRender = false;
 
 			const renderState = () => {
 				if (!this.view) {
 					return;
 				}
-				const items = followupBuffer
-					.split(/\r?\n/)
-					.map(s => s.trim())
-					.filter(Boolean);
-				const seen = new Set<string>();
-				const unique: string[] = [];
-				for (const it of items) {
-					if (!seen.has(it)) {
-						seen.add(it);
-						unique.push(it);
-					}
+				// 防抖：如果已经有待处理的渲染，跳过
+				if (pendingRender) {
+					return;
 				}
-				const followups = unique.length > 0
-					? ['','---','','后续提问', ...unique.map(q => `- ${q}`)].join('\n')
-					: '';
-				const body = followups ? `${header}${articleText}\n${followups}` : `${header}${articleText}`;
-				const html = this.renderMarkdown(body);
-				void this.view.webview.postMessage({ type: 'replace', html });
+				pendingRender = true;
+				
+				// 延迟一小段时间，合并多次快速更新
+				setTimeout(() => {
+					pendingRender = false;
+					
+					const items = followupBuffer
+						.split(/\r?\n/)
+						.map(s => s.trim())
+						.filter(Boolean);
+					const seen = new Set<string>();
+					const unique: string[] = [];
+					for (const it of items) {
+						if (!seen.has(it)) {
+							seen.add(it);
+							unique.push(it);
+						}
+					}
+					
+					this.currentArticle = articleText;
+					this.sendUpdateContent(articleText, unique);
+				}, 50);
 			};
+
+			// 更新标题和符号信息
+			this.sendInitState({
+				title: name,
+				symbolKindName: symbolKindText ?? '',
+				symbolKind: symbolType,
+				isLoading: true,
+				content: '（流式加载中…）',
+				followups: [],
+				...this.getNavigationState()
+			});
 
 			await streamDeepwikiArticle({
 				symbolName: name,
@@ -106,157 +396,111 @@ export class ContextWebviewViewProvider implements vscode.WebviewViewProvider {
 				quickGrepContext: quickGrepContext ?? undefined,
 				fullGrepContext: fullGrepContext ?? undefined
 			}, (m: DeepwikiStreamMessage) => {
-				if (!this.view) return;
-				if (m.type === 'article' && (m as any).text) {
-					articleText += String((m as any).text);
+				if (!this.view) {
+					return;
+				}
+				if (m.type === 'article' && (m as { text?: string }).text) {
+					articleText += String((m as { text?: string }).text);
 					renderState();
-				} else if (m.type === 'followup' && (m as any).text) {
-					followupBuffer += String((m as any).text);
+				} else if (m.type === 'followup' && (m as { text?: string }).text) {
+					followupBuffer += String((m as { text?: string }).text);
 					renderState();
 				} else if (m.type === 'done') {
 					renderState();
+					this.sendLoadingDone();
 				}
 			});
 			renderState();
+			this.sendLoadingDone();
+
+			// 保存到历史记录
+			if (articleText) {
+				const followups = followupBuffer
+					.split(/\r?\n/)
+					.map(s => s.trim())
+					.filter(Boolean)
+					.filter((v, i, a) => a.indexOf(v) === i);
+				
+				this.pushHistory({
+					title: name,
+					symbolKindName: symbolKindText ?? '',
+					symbolKind: symbolType,
+					markdown: articleText,
+					followups,
+					// 符号位置信息
+					filePath: doc.uri.fsPath,
+					line: wordRange.start.line + 1,
+					// 上下文信息
+					fileContext: fileContext ?? undefined,
+					usageContext: usageContext ?? undefined,
+					traceContext: traceContext ?? undefined,
+					quickGrepContext: quickGrepContext ?? undefined,
+					fullGrepContext: fullGrepContext ?? undefined
+				});
+			}
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
 			
 			// Special handling for LSP unavailable error
 			if (message.includes('LSP is not available') || message.includes('Cannot get definitions: LSP is not available')) {
-				this.view.webview.html = this.renderHtml('LSP 服务不可用', 
-					`LSP (Language Server Protocol) 服务当前不可用。\n\n可能的原因：\n• 当前文件类型不支持 LSP 服务\n• LSP 服务器未启动或崩溃\n• 扩展配置问题\n\n建议的解决方案：\n• 检查是否安装了对应语言的 LSP 扩展\n• 重新 VS Code 或重启 LSP 服务\n• 尝试在其他支持的文件中使用\n\n错误详情：\n${message}`
-				);
+				this.sendInitState({
+					title: 'LSP 服务不可用',
+					symbolKindName: '',
+					symbolKind: 0,
+					isLoading: false,
+					content: `LSP (Language Server Protocol) 服务当前不可用。\n\n**可能的原因：**\n- 当前文件类型不支持 LSP 服务\n- LSP 服务器未启动或崩溃\n- 扩展配置问题\n\n**建议的解决方案：**\n- 检查是否安装了对应语言的 LSP 扩展\n- 重新启动 VS Code 或重启 LSP 服务\n- 尝试在其他支持的文件中使用\n\n**错误详情：**\n\`${message}\``,
+					followups: [],
+					canGoPrev: false,
+					canGoNext: false
+				});
 			} else {
-				this.view.webview.html = this.renderHtml('Error', `DeepWiki 请求失败或解析出错：\n${message}`);
+				this.sendInitState({
+					title: 'Error',
+					symbolKindName: '',
+					symbolKind: 0,
+					isLoading: false,
+					content: `DeepWiki 请求失败或解析出错：\n\n\`${message}\``,
+					followups: [],
+					canGoPrev: false,
+					canGoNext: false
+				});
 			}
 		}
 	}
 
-    
-	private renderHtml(title: string, body: string): string {
-		const htmlBody = this.renderMarkdown(body);
-		return `<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<style>
-	body {
-		font-family: var(--vscode-editor-font-family);
-		padding: 8px;
-		color: var(--vscode-editor-foreground);
-		background-color: var(--vscode-editor-background);
-	}
-	h2 {
-		font-size: 13px;
-		margin: 0 0 6px 0;
-	}
-	.markdown-body { line-height: 1.5; }
-	.markdown-body h1, .markdown-body h2, .markdown-body h3 { margin: 12px 0 6px; }
-	.markdown-body p { margin: 6px 0; }
-	.markdown-body ul { padding-left: 20px; }
-	.markdown-body code { background: rgba(127,127,127,0.12); padding: 0 3px; border-radius: 3px; }
-	.markdown-body pre { background: rgba(127,127,127,0.12); padding: 8px; border-radius: 6px; overflow: auto; }
-	.markdown-body pre code { background: transparent; padding: 0; }
-</style>
-<title>${title}</title>
-</head>
-<body>
-<h2>${title}</h2>
-<div class="markdown-body">${htmlBody}</div>
-<script>
-// 接收扩展端 postMessage，流式追加或替换 HTML 片段
-window.addEventListener('message', (event) => {
-  const msg = event.data || {};
-  const container = document.querySelector('.markdown-body');
-  if (!container) return;
-  if (msg.type === 'append' && msg.html) {
-    const wrapper = document.createElement('div');
-    wrapper.innerHTML = msg.html;
-    while (wrapper.firstChild) {
-      container.appendChild(wrapper.firstChild);
-    }
-  } else if (msg.type === 'replace' && msg.html) {
-    container.innerHTML = msg.html;
-  }
-});
-</script>
-</body>
-</html>`;
-	}
-
-	// Minimal Markdown -> HTML converter (headings, lists, code, links, emphasis)
-	private renderMarkdown(src: string): string {
-		let text = (src ?? '').replace(/\r\n/g, '\n');
-
-		// Escape HTML first
-		const escapeHtml = (s: string) => s
-			.replace(/&/g, '&amp;')
-			.replace(/</g, '&lt;')
-			.replace(/>/g, '&gt;')
-			.replace(/\"/g, '&quot;');
-
-		text = escapeHtml(text);
-
-		// Preserve fenced code blocks using placeholders to avoid later transforms inside
-		const codeBlocks: string[] = [];
-		text = text.replace(/```(\w+)?\n([\s\S]*?)```/g, (_m, lang: string | undefined, code: string) => {
-			const idx = codeBlocks.length;
-			const cls = lang ? ` class="language-${lang}"` : '';
-			codeBlocks.push(`<pre><code${cls}>${code.replace(/\n$/,'')}</code></pre>`);
-			return `@@CODEBLOCK_${idx}@@`;
-		});
-
-		// Headings (# to ######)
-		for (let level = 6; level >= 1; level--) {
-			const re = new RegExp(`^${'#'.repeat(level)}\\s+(.+)$`, 'gm');
-			text = text.replace(re, (_m, g1) => `<h${level}>${g1.trim()}</h${level}>`);
+	private getWebviewHtml(webview: vscode.Webview): string {
+		const webviewPath = path.join(this.extensionUri.fsPath, 'dist', 'webview', 'index.html');
+		
+		if (!fs.existsSync(webviewPath)) {
+			throw new Error('Webview 未构建，请先运行 pnpm build:webview');
 		}
-
-		// Inline code (after escaping)
-		text = text.replace(/`([^`]+)`/g, (_m, g1) => `<code>${g1}</code>`);
-
-		// Bold and italic
-		text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-		text = text.replace(/\*([^*]+)\*/g, '<em>$1</em>');
-
-		// Links [text](url)
-		text = text.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_m, label, url) => {
-			return `<a href="${url}" target="_blank" rel="noopener">${label}</a>`;
-		});
-
-		// Simple lists: convert lines starting with - or *
-		const lines = text.split('\n');
-		const out: string[] = [];
-		let inList = false;
-		for (const line of lines) {
-			const m = line.match(/^\s*[-*]\s+(.*)$/);
-			if (m) {
-				if (!inList) { out.push('<ul>'); inList = true; }
-				out.push(`<li>${m[1]}</li>`);
-			} else {
-				if (inList) { out.push('</ul>'); inList = false; }
-				out.push(line);
-			}
+		
+		// 获取 codicon 字体的 URI（使用 assets 下的资源）
+		const codiconsUri = webview.asWebviewUri(
+			vscode.Uri.joinPath(this.extensionUri, 'assets', 'codicons', 'codicon.css')
+		);
+		
+		const html = fs.readFileSync(webviewPath, 'utf-8');
+		const csp = `default-src 'none'; style-src 'unsafe-inline' ${webview.cspSource}; script-src 'unsafe-inline' 'unsafe-eval'; font-src ${webview.cspSource} data:; img-src ${webview.cspSource} data: https:;`;
+		
+		// 注入 codicon CSS
+		const codiconLink = `<link rel="stylesheet" href="${codiconsUri}">`;
+		
+		let result = html;
+		
+		// 注入 CSP
+		if (/<meta\s+http-equiv="Content-Security-Policy"/i.test(result)) {
+			result = result.replace(
+				/<meta\s+http-equiv="Content-Security-Policy"[^>]*>/i,
+				`<meta http-equiv="Content-Security-Policy" content="${csp}">`
+			);
+		} else {
+			result = result.replace('<head>', `<head>\n<meta http-equiv="Content-Security-Policy" content="${csp}">`);
 		}
-		if (inList) {
-			out.push('</ul>');
-		}
-		text = out.join('\n');
-
-		// Paragraphs: wrap plain text blocks not already HTML blocks
-		const blocks = text.split(/\n{2,}/);
-		const rendered = blocks.map(b => {
-			const trimmed = b.trim();
-			if (!trimmed) {
-				return '';
-			}
-			if (/^\s*<\/?(h\d|ul|li|pre|code|blockquote)/i.test(trimmed)) {
-				return trimmed;
-			}
-			return `<p>${trimmed.replace(/\n/g, '<br/>')}</p>`;
-		}).join('\n');
-
-		// Restore code blocks
-		return rendered.replace(/@@CODEBLOCK_(\d+)@@/g, (_m, i) => codeBlocks[Number(i)] ?? '');
+		
+		// 注入 codicon CSS
+		result = result.replace('</head>', `${codiconLink}\n</head>`);
+		
+		return result;
 	}
 }

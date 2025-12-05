@@ -1,3 +1,7 @@
+packages:
+  - '.'
+  - 'src/webview'
+
 onlyBuiltDependencies:
   - '@vscode/vsce-sign'
   - esbuild

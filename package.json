@@ -22,7 +22,7 @@
       "activitybar": [
         {
           "id": "contextCodeText",
-          "title": "Context Code Text",
+          "title": "DeepWiki (Beta)",
           "icon": "resources/context-code-text.svg"
         }
       ]
@@ -31,7 +31,7 @@
       "contextCodeText": [
         {
           "id": "contextCodeText.contextView",
-          "name": "Context",
+          "name": "DeepWiki",
           "type": "webview"
         }
       ]
@@ -63,6 +63,16 @@
       {
         "command": "context-code-text.showDeepWiki",
         "title": "Context Code Text: Show DeepWiki"
+      },
+      {
+        "command": "context-code-text.refresh",
+        "title": "Refresh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "context-code-text.copyArticle",
+        "title": "Copy Article",
+        "icon": "$(copy)"
       }
     ],
     "menus": {
@@ -77,16 +87,29 @@
           "group": "navigation@9",
           "when": "editorTextFocus"
         }
+      ],
+      "view/title": [
+        {
+          "command": "context-code-text.refresh",
+          "when": "view == contextCodeText.contextView",
+          "group": "navigation"
+        },
+        {
+          "command": "context-code-text.copyArticle",
+          "when": "view == contextCodeText.contextView",
+          "group": "navigation"
+        }
       ]
     }
   },
   "scripts": {
     "vscode:prepublish": "pnpm run package",
-    "compile": "pnpm run check-types && pnpm run lint && node esbuild.js",
+    "compile": "pnpm run build:webview && pnpm run check-types && pnpm run lint && node esbuild.js",
     "watch": "npm-run-all -p watch:*",
     "watch:esbuild": "node esbuild.js --watch",
     "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
-    "package": "pnpm run check-types && pnpm run lint && node esbuild.js --production",
+    "build:webview": "pnpm --filter deepwiki-webview build",
+    "package": "pnpm run build:webview && pnpm run check-types && pnpm run lint && node esbuild.js --production",
     "package:vsix": "pnpm run package && vsce package --no-dependencies --out dist/context-code-text.vsix",
     "check-types": "tsc --noEmit",
     "lint": "eslint src"
@@ -106,5 +129,6 @@
     "@protobuf-ts/runtime": "^2.11.1",
     "@protobuf-ts/runtime-rpc": "^2.11.1",
     "node-fetch": "^3.3.2"
-  }
+  },
+  "packageManager": "pnpm@10.18.3+sha512.bbd16e6d7286fd7e01f6b3c0b3c932cda2965c06a908328f74663f10a9aea51f1129eea615134bf992831b009eabe167ecb7008b597f40ff9bc75946aadfb08d"
 }

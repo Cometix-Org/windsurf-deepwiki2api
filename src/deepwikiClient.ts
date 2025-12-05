@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as os from 'os';
 import * as crypto from 'crypto';
 import * as zlib from 'zlib';
+import { getGlobalState } from './globalState';
 import { BinaryWriter, BinaryReader } from '@protobuf-ts/runtime';
 import { GetDeepWikiRequest as PBGetDeepWikiRequest, GetDeepWikiResponse as PBGetDeepWikiResponse, Metadata as PBMetadata } from './generated/deepwiki_full';
 import { getOutputChannel } from './outputChannel';
@@ -22,15 +23,15 @@ export interface DeepwikiContextParams {
 }
 
 function ensureWorkspaceId(): string {
-	const config = vscode.workspace.getConfiguration('context-code-text');
-	let id = config.get<string>('workspaceId');
+	const state = getGlobalState();
+	let id = state.get<string>('workspaceId');
 	if (!id) {
 		const buf = crypto.randomBytes(16);
 		buf[6] = (buf[6] & 0x0f) | 0x40;
 		buf[8] = (buf[8] & 0x3f) | 0x80;
 		const hex = buf.toString('hex');
 		id = `${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20)}`;
-		void config.update('workspaceId', id, vscode.ConfigurationTarget.Global);
+		void state.update('workspaceId', id);
 	}
 	return id;
 }
@@ -555,7 +556,7 @@ export async function streamDeepwikiArticle(
         while (buffer.length >= 5) {
             const flags = buffer[0];
             const len = buffer.readUInt32BE(1);
-            if (len < 0 || buffer.length < 5 + len) break;
+            if (len < 0 || buffer.length < 5 + len) {break;}
             const payload = buffer.subarray(5, 5 + len);
             buffer = buffer.subarray(5 + len);
             frameIndex += 1;
@@ -568,7 +569,7 @@ export async function streamDeepwikiArticle(
     if (reader && typeof reader.read === 'function') {
         while (true) {
             const { value, done } = await reader.read();
-            if (done) break;
+            if (done) {break;}
             const chunk = Buffer.from(value);
             buffer = Buffer.concat([buffer, chunk]);
             processBuffer();

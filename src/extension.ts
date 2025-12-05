@@ -6,6 +6,7 @@ import { NodeScoreService } from './nodeScoreService';
 import { LspService } from './lspService';
 import { TraceService } from './traceService';
 import { disposeOutputChannel } from './outputChannel';
+import { initGlobalState } from './globalState';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as zlib from 'zlib';
@@ -20,6 +21,8 @@ const HAS_OUTLINE_CONTEXT_KEY = 'contextCodeText.hasOutlineContext';
 let contextUpdateToken = 0;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+	// 初始化全局状态存储
+	initGlobalState(context);
 	// Removed automatic DeepWiki startup smoke test to avoid unintended network calls
 	const lsp = new LspService(vscode.commands, vscode.workspace);
 	const nodeScore = new NodeScoreService();
@@ -36,14 +39,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		void runWindsurfLogin();
 	});
 
-	const contextViewProvider = new ContextWebviewViewProvider(nodeCreator);
+	const contextViewProvider = new ContextWebviewViewProvider(nodeCreator, context.extensionUri);
 	const viewDisposable = vscode.window.registerWebviewViewProvider('contextCodeText.contextView', contextViewProvider);
 
 	const deepwikiDisposable = vscode.commands.registerCommand('context-code-text.showDeepWiki', () => {
 		void contextViewProvider.updateForEditor(vscode.window.activeTextEditor ?? undefined);
 	});
 
-	context.subscriptions.push(lsp, ...disposables, loginDisposable, viewDisposable, deepwikiDisposable);
+	const refreshDisposable = vscode.commands.registerCommand('context-code-text.refresh', () => {
+		void contextViewProvider.updateForEditor(vscode.window.activeTextEditor ?? undefined);
+	});
+
+	const copyArticleDisposable = vscode.commands.registerCommand('context-code-text.copyArticle', () => {
+		contextViewProvider.copyCurrentArticle();
+	});
+
+	context.subscriptions.push(lsp, ...disposables, loginDisposable, viewDisposable, deepwikiDisposable, refreshDisposable, copyArticleDisposable);
 	registerContextKeyUpdater(context, nodeCreator);
 }
 
