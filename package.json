@@ -43,6 +43,16 @@
           "type": "string",
           "default": "",
           "description": "Windsurf AuthService JWT auth token returned from GetUserJwt"
+        },
+        "context-code-text.shikiThemeDark": {
+          "type": "string",
+          "default": "github-dark-default",
+          "description": "Shiki theme name used when VS Code is in a dark theme (e.g. 'github-dark-default', 'vscode-dark-plus')."
+        },
+        "context-code-text.shikiThemeLight": {
+          "type": "string",
+          "default": "github-light-default",
+          "description": "Shiki theme name used when VS Code is in a light theme (e.g. 'github-light-default', 'vscode-light-plus')."
         }
       }
     },
@@ -58,6 +68,18 @@
       {
         "command": "context-code-text.showDeepWiki",
         "title": "Context Code Text: Show DeepWiki"
+      },
+      {
+        "command": "context-code-text.goBack",
+        "title": "Go Back",
+        "icon": "$(chevron-left)",
+        "enablement": "contextCodeText.canGoBack"
+      },
+      {
+        "command": "context-code-text.goForward",
+        "title": "Go Forward",
+        "icon": "$(chevron-right)",
+        "enablement": "contextCodeText.canGoForward"
       },
       {
         "command": "context-code-text.refresh",
@@ -85,14 +107,24 @@
       ],
       "view/title": [
         {
-          "command": "context-code-text.refresh",
+          "command": "context-code-text.goBack",
           "when": "view == contextCodeText.contextView",
-          "group": "navigation"
+          "group": "navigation@1"
+        },
+        {
+          "command": "context-code-text.goForward",
+          "when": "view == contextCodeText.contextView",
+          "group": "navigation@2"
         },
         {
           "command": "context-code-text.copyArticle",
           "when": "view == contextCodeText.contextView",
-          "group": "navigation"
+          "group": "navigation@3"
+        },
+        {
+          "command": "context-code-text.refresh",
+          "when": "view == contextCodeText.contextView",
+          "group": "navigation@4"
         }
       ]
     }
@@ -123,7 +155,8 @@
   "dependencies": {
     "@protobuf-ts/runtime": "^2.11.1",
     "@protobuf-ts/runtime-rpc": "^2.11.1",
-    "node-fetch": "^3.3.2"
+    "node-fetch": "^3.3.2",
+    "shiki": "^1.22.0"
   },
   "packageManager": "pnpm@10.18.3+sha512.bbd16e6d7286fd7e01f6b3c0b3c932cda2965c06a908328f74663f10a9aea51f1129eea615134bf992831b009eabe167ecb7008b597f40ff9bc75946aadfb08d"
 }

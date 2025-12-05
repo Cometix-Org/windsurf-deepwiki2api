@@ -358,10 +358,99 @@ function generateCodeHeader(
 }
 
 /**
- * 处理 Markdown 文本，将代码块转换为带语法高亮的 HTML
+ * 代码块信息结构
+ */
+interface CodeBlockInfo {
+	fullMatch: string;
+	language: string;
+	code: string;
+	filePath: string | null;
+	startLine: number | null;
+	endLine: number | null;
+	remainingCode: string;
+}
+
+/**
+ * 从 Markdown 中提取所有代码块信息
+ */
+function extractCodeBlocks(markdown: string): CodeBlockInfo[] {
+	const codeBlockRegex = /```(\w*)\n([\s\S]*?)```/g;
+	const blocks: CodeBlockInfo[] = [];
+	let match;
+
+	while ((match = codeBlockRegex.exec(markdown)) !== null) {
+		const lang = match[1];
+		const code = match[2];
+		const language = lang || 'plaintext';
+
+		let { filePath, startLine, endLine, remainingCode } = parseCodeBlockHeader(code);
+
+		if (filePath && !isExistingFilePath(filePath)) {
+			filePath = null;
+			startLine = null;
+			endLine = null;
+			remainingCode = code;
+		}
+
+		blocks.push({
+			fullMatch: match[0],
+			language,
+			code,
+			filePath,
+			startLine,
+			endLine,
+			remainingCode
+		});
+	}
+
+	return blocks;
+}
+
+/**
+ * 处理 Markdown 文本，将代码块转换为带语法高亮的 HTML（异步版本）
+ * 使用扩展端的 Shiki 进行语法高亮
  * 
  * @param markdown 原始 Markdown 文本
- * @returns 处理后的 Markdown（代码块已转换为 HTML）
+ * @param highlightFn 高亮函数，接收代码和语言，返回高亮后的 HTML
+ * @returns 处理后的 Markdown（代码块已转换为带高亮的 HTML）
+ */
+export async function processMarkdownCodeBlocksAsync(
+	markdown: string,
+	highlightFn: (code: string, lang: string) => Promise<string>
+): Promise<string> {
+	const blocks = extractCodeBlocks(markdown);
+
+	if (blocks.length === 0) {
+		return markdown;
+	}
+
+	// 并行高亮所有代码块
+	const highlightedBlocks = await Promise.all(
+		blocks.map(async (block) => {
+			const headerHtml = generateCodeHeader(block.language, block.filePath, block.startLine, block.endLine);
+			const highlightedCode = await highlightFn(block.remainingCode.trimEnd(), block.language);
+			return {
+				...block,
+				html: `<div class="code-window">${headerHtml}<div class="code-content">${highlightedCode}</div></div>`
+			};
+		})
+	);
+
+	// 替换所有代码块
+	let result = markdown;
+	for (const block of highlightedBlocks) {
+		result = result.replace(block.fullMatch, block.html);
+	}
+
+	return result;
+}
+
+/**
+ * 处理 Markdown 文本，将代码块转换为带语法高亮的 HTML（同步版本，无高亮）
+ * 用于不需要 Shiki 高亮的场景
+ * 
+ * @param markdown 原始 Markdown 文本
+ * @returns 处理后的 Markdown（代码块已转换为 HTML，但无语法高亮）
  */
 export function processMarkdownCodeBlocks(markdown: string): string {
 	// 匹配 ``` 代码块
@@ -381,8 +470,10 @@ export function processMarkdownCodeBlocks(markdown: string): string {
 		
 		const headerHtml = generateCodeHeader(language, filePath, startLine, endLine);
 		
-		const tokenizedHtml = tokenizeCode(remainingCode.trimEnd(), language);
+		// 保留原始代码，无语法高亮
+		const escapedCode = escapeHtml(remainingCode.trimEnd());
+		const codeHtml = `<pre><code class="language-${language}">${escapedCode}</code></pre>`;
 		
-		return `<div class="code-window">${headerHtml}<div class="code-content">${tokenizedHtml}</div></div>`;
+		return `<div class="code-window">${headerHtml}<div class="code-content">${codeHtml}</div></div>`;
 	});
 }

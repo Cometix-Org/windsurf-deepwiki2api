@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed } from 'vue';
+import { ref, onMounted, onUnmounted } from 'vue';
 import { marked } from 'marked';
 import SymbolHeader from './components/SymbolHeader.vue';
 import ContentArea from './components/ContentArea.vue';
@@ -21,10 +21,12 @@ const state = ref<WebviewState>({
   content: '将光标移动到代码中的一个符号上以查看 DeepWiki 结果。',
   followups: [],
   canGoPrev: false,
-  canGoNext: false
+  canGoNext: false,
+  shikiTheme: undefined
 });
 
 // 渲染 Markdown 为 HTML
+// 注意：代码块的语法高亮已在扩展端由 Shiki 完成，这里只处理其他 markdown 元素
 function renderMarkdown(md: string): string {
   try {
     return marked.parse(md) as string;
@@ -37,17 +39,21 @@ function handleMessage(event: MessageEvent<IncomingMessage>) {
   const msg = event.data;
   
   if (msg.type === 'initState') {
-    // initState 的 content 也是 markdown，需要渲染
-    state.value = {
+    // initState 的 content 可能是 markdown 或已处理的 HTML
+    const nextState: WebviewState = {
       ...msg.state,
       content: renderMarkdown(msg.state.content)
     };
+    state.value = nextState;
   } else if (msg.type === 'updateContent') {
+    // 扩展端已经完成了代码块的 Shiki 高亮，这里只需渲染其他 markdown 元素
     state.value.content = renderMarkdown(msg.markdown);
     state.value.followups = msg.followups;
     state.value.isLoading = false;
   } else if (msg.type === 'loadingDone') {
     state.value.isLoading = false;
+  } else if (msg.type === 'setTheme') {
+    // 主题变化由扩展端处理，webview 不再需要响应
   }
 }
 
@@ -161,10 +167,8 @@ body {
   top: 0;
   z-index: 100;
   background: var(--vscode-sideBar-background, var(--vscode-panel-background, var(--bg-color)));
-  padding: 12px 0;
+  padding: 12px 16px;
   margin: 0 -16px;
-  padding-left: 16px;
-  padding-right: 16px;
   border-bottom: 1px solid var(--vscode-sideBar-border, var(--border-color));
 }
 
@@ -183,4 +187,3 @@ body {
   background: transparent;
 }
 </style>
-

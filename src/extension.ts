@@ -54,7 +54,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		contextViewProvider.copyCurrentArticle();
 	});
 
-	context.subscriptions.push(lsp, ...disposables, loginDisposable, viewDisposable, deepwikiDisposable, refreshDisposable, copyArticleDisposable);
+	const goBackDisposable = vscode.commands.registerCommand('context-code-text.goBack', () => {
+		contextViewProvider.goBack();
+	});
+
+	const goForwardDisposable = vscode.commands.registerCommand('context-code-text.goForward', () => {
+		contextViewProvider.goForward();
+	});
+
+	context.subscriptions.push(lsp, ...disposables, loginDisposable, viewDisposable, deepwikiDisposable, refreshDisposable, copyArticleDisposable, goBackDisposable, goForwardDisposable);
 	registerContextKeyUpdater(context, nodeCreator);
 }
 

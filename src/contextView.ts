@@ -3,7 +3,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { NodeCreatorService } from './nodeCreatorService';
 import { streamDeepwikiArticle, DeepwikiStreamMessage } from './deepwikiClient';
-import { processMarkdownCodeBlocks } from './codeTokenizer';
+import { processMarkdownCodeBlocks, processMarkdownCodeBlocksAsync } from './codeTokenizer';
+import { getShikiService } from './shikiService';
 
 // Webview 状态类型定义（与 webview/src/types.ts 保持一致）
 interface WebviewState {
@@ -15,6 +16,7 @@ interface WebviewState {
 	followups: string[];
 	canGoPrev: boolean;
 	canGoNext: boolean;
+	shikiTheme?: string;
 }
 
 interface HistoryEntry {
@@ -41,6 +43,7 @@ export class ContextWebviewViewProvider implements vscode.WebviewViewProvider {
 	private history: HistoryEntry[] = [];
 	private historyIndex: number = -1;
 	private currentArticle: string = '';
+	private updateGeneration: number = 0;
 
 	constructor(
 		private readonly nodeCreator: NodeCreatorService,
@@ -61,6 +64,22 @@ export class ContextWebviewViewProvider implements vscode.WebviewViewProvider {
 		
 		// 处理来自 webview 的消息
 		webviewView.webview.onDidReceiveMessage(this.handleWebviewMessage.bind(this));
+		
+		// 监听 VS Code 主题和配置变化，更新 Shiki 主题
+		vscode.window.onDidChangeActiveColorTheme(() => {
+			this.sendThemeToWebview();
+		});
+		vscode.workspace.onDidChangeConfiguration(e => {
+			if (e.affectsConfiguration('context-code-text.shikiThemeDark') || e.affectsConfiguration('context-code-text.shikiThemeLight')) {
+				this.sendThemeToWebview();
+			}
+		});
+		
+		// 初次加载时同步一次 Shiki 主题
+		this.sendThemeToWebview();
+		
+		// 初始化导航状态
+		this.updateNavigationContext();
 		
 		// 初始化状态
 		this.sendInitState({
@@ -163,31 +182,62 @@ export class ContextWebviewViewProvider implements vscode.WebviewViewProvider {
 		}
 	}
 
-	private handleNavigate(direction: 'prev' | 'next'): void {
+	private async handleNavigate(direction: 'prev' | 'next'): Promise<void> {
 		if (direction === 'prev' && this.historyIndex > 0) {
 			this.historyIndex--;
-			this.showHistoryEntry();
+			await this.showHistoryEntry();
+			this.updateNavigationContext();
 		} else if (direction === 'next' && this.historyIndex < this.history.length - 1) {
 			this.historyIndex++;
-			this.showHistoryEntry();
+			await this.showHistoryEntry();
+			this.updateNavigationContext();
 		}
 	}
 
-	private showHistoryEntry(): void {
+	/** 供命令使用的公开导航方法 */
+	public goBack(): void {
+		void this.handleNavigate('prev');
+	}
+
+	public goForward(): void {
+		void this.handleNavigate('next');
+	}
+
+	public canGoBack(): boolean {
+		return this.historyIndex > 0;
+	}
+
+	public canGoForward(): boolean {
+		return this.historyIndex < this.history.length - 1;
+	}
+
+	/** 更新 VS Code context key 以控制按钮启用状态 */
+	private updateNavigationContext(): void {
+		void vscode.commands.executeCommand('setContext', 'contextCodeText.canGoBack', this.canGoBack());
+		void vscode.commands.executeCommand('setContext', 'contextCodeText.canGoForward', this.canGoForward());
+	}
+
+	private async showHistoryEntry(): Promise<void> {
 		const entry = this.history[this.historyIndex];
 		if (!entry) {return;}
 
 		this.currentArticle = entry.markdown;
+		
+		// 先发送基本状态（显示加载中）
 		this.sendInitState({
 			title: entry.title,
 			symbolKindName: entry.symbolKindName,
 			symbolKind: entry.symbolKind,
-			isLoading: false,
-			content: entry.markdown,
-			followups: entry.followups,
+			isLoading: true,
+			content: '正在渲染...',
+			followups: [],
 			canGoPrev: this.historyIndex > 0,
 			canGoNext: this.historyIndex < this.history.length - 1
 		});
+		
+		// 使用 Shiki 高亮渲染
+		await this.sendUpdateContentWithHighlight(entry.markdown, entry.followups);
+		this.sendLoadingDone();
 	}
 
 	private pushHistory(entry: HistoryEntry): void {
@@ -197,6 +247,7 @@ export class ContextWebviewViewProvider implements vscode.WebviewViewProvider {
 		}
 		this.history.push(entry);
 		this.historyIndex = this.history.length - 1;
+		this.updateNavigationContext();
 	}
 
 	private getNavigationState(): { canGoPrev: boolean; canGoNext: boolean } {
@@ -207,12 +258,55 @@ export class ContextWebviewViewProvider implements vscode.WebviewViewProvider {
 	}
 
 	private sendInitState(state: WebviewState): void {
-		void this.view?.webview.postMessage({ type: 'initState', state });
+		const theme = this.getCurrentShikiTheme();
+		const nextState: WebviewState = {
+			...state,
+			shikiTheme: theme
+		};
+		void this.view?.webview.postMessage({ type: 'initState', state: nextState });
 	}
 
+	private getCurrentShikiTheme(): string {
+		const config = vscode.workspace.getConfiguration('context-code-text');
+		const darkTheme = config.get<string>('shikiThemeDark', 'github-dark-default');
+		const lightTheme = config.get<string>('shikiThemeLight', 'github-light-default');
+		const kind = vscode.window.activeColorTheme.kind;
+		const isDark = kind === vscode.ColorThemeKind.Dark || kind === vscode.ColorThemeKind.HighContrast;
+		return isDark ? darkTheme : lightTheme;
+	}
+
+	private sendThemeToWebview(): void {
+		const theme = this.getCurrentShikiTheme();
+		void this.view?.webview.postMessage({ type: 'setTheme', theme });
+	}
+
+	/**
+	 * 发送内容更新（同步版本，无 Shiki 高亮，用于流式渲染）
+	 */
 	private sendUpdateContent(markdown: string, followups: string[]): void {
-		// 在发送前处理代码块，添加语法高亮
+		// 在发送前处理代码块（无高亮）
 		let processedMarkdown = processMarkdownCodeBlocks(markdown);
+		
+		// 替换图标占位符为 webview URI
+		processedMarkdown = this.replaceIconPlaceholders(processedMarkdown);
+		
+		void this.view?.webview.postMessage({ type: 'updateContent', markdown: processedMarkdown, followups });
+	}
+
+	/**
+	 * 发送内容更新（异步版本，带 Shiki 高亮，用于流式结束后）
+	 */
+	private async sendUpdateContentWithHighlight(markdown: string, followups: string[]): Promise<void> {
+		const shikiService = getShikiService();
+		
+		// 预加载所需语言
+		await shikiService.preloadLanguages(markdown);
+		
+		// 使用 Shiki 进行代码块高亮
+		let processedMarkdown = await processMarkdownCodeBlocksAsync(
+			markdown,
+			(code, lang) => shikiService.highlightCode(code, lang)
+		);
 		
 		// 替换图标占位符为 webview URI
 		processedMarkdown = this.replaceIconPlaceholders(processedMarkdown);
@@ -299,6 +393,8 @@ export class ContextWebviewViewProvider implements vscode.WebviewViewProvider {
 		const name = doc.getText(wordRange);
 		const location = `${doc.uri.fsPath}:${wordRange.start.line + 1}`;
 
+		const gen = ++this.updateGeneration;
+
 		// 设置加载状态
 		this.sendInitState({
 			title: name,
@@ -313,6 +409,8 @@ export class ContextWebviewViewProvider implements vscode.WebviewViewProvider {
 
 		try {
 			const rich = await this.nodeCreator.getRichNode(doc.uri, wordRange.start);
+			if (gen !== this.updateGeneration) { return; }
+
 			if (!rich) {
 				this.sendInitState({
 					title: 'No rich node',
@@ -335,6 +433,7 @@ export class ContextWebviewViewProvider implements vscode.WebviewViewProvider {
 				rich.getGrepContext(),
 				rich.getSymbolKindText()
 			]);
+			if (gen !== this.updateGeneration) { return; }
 
 			const symbolType = rich.getSymbolKind ? await rich.getSymbolKind() : 0;
 
@@ -344,7 +443,7 @@ export class ContextWebviewViewProvider implements vscode.WebviewViewProvider {
 			let pendingRender = false;
 
 			const renderState = () => {
-				if (!this.view) {
+				if (!this.view || gen !== this.updateGeneration) {
 					return;
 				}
 				// 防抖：如果已经有待处理的渲染，跳过
@@ -356,6 +455,7 @@ export class ContextWebviewViewProvider implements vscode.WebviewViewProvider {
 				// 延迟一小段时间，合并多次快速更新
 				setTimeout(() => {
 					pendingRender = false;
+					if (gen !== this.updateGeneration) { return; }
 					
 					const items = followupBuffer
 						.split(/\r?\n/)
@@ -396,7 +496,7 @@ export class ContextWebviewViewProvider implements vscode.WebviewViewProvider {
 				quickGrepContext: quickGrepContext ?? undefined,
 				fullGrepContext: fullGrepContext ?? undefined
 			}, (m: DeepwikiStreamMessage) => {
-				if (!this.view) {
+				if (!this.view || gen !== this.updateGeneration) {
 					return;
 				}
 				if (m.type === 'article' && (m as { text?: string }).text) {
@@ -410,7 +510,19 @@ export class ContextWebviewViewProvider implements vscode.WebviewViewProvider {
 					this.sendLoadingDone();
 				}
 			});
+			if (gen !== this.updateGeneration) { return; }
 			renderState();
+			
+			// 流式结束后，使用 Shiki 高亮重新渲染一次
+			if (articleText) {
+				const finalFollowups = followupBuffer
+					.split(/\r?\n/)
+					.map(s => s.trim())
+					.filter(Boolean)
+					.filter((v, i, a) => a.indexOf(v) === i);
+				await this.sendUpdateContentWithHighlight(articleText, finalFollowups);
+			}
+			
 			this.sendLoadingDone();
 
 			// 保存到历史记录
@@ -439,6 +551,7 @@ export class ContextWebviewViewProvider implements vscode.WebviewViewProvider {
 				});
 			}
 		} catch (err) {
+			if (gen !== this.updateGeneration) { return; }
 			const message = err instanceof Error ? err.message : String(err);
 			
 			// Special handling for LSP unavailable error
@@ -474,14 +587,28 @@ export class ContextWebviewViewProvider implements vscode.WebviewViewProvider {
 		if (!fs.existsSync(webviewPath)) {
 			throw new Error('Webview 未构建，请先运行 pnpm build:webview');
 		}
+
+		// 获取资源 URI
+		const scriptUri = webview.asWebviewUri(
+			vscode.Uri.joinPath(this.extensionUri, 'dist', 'webview', 'assets', 'index.js')
+		);
+		const styleUri = webview.asWebviewUri(
+			vscode.Uri.joinPath(this.extensionUri, 'dist', 'webview', 'assets', 'style.css')
+		);
 		
 		// 获取 codicon 字体的 URI（使用 assets 下的资源）
 		const codiconsUri = webview.asWebviewUri(
 			vscode.Uri.joinPath(this.extensionUri, 'assets', 'codicons', 'codicon.css')
 		);
 		
-		const html = fs.readFileSync(webviewPath, 'utf-8');
-		const csp = `default-src 'none'; style-src 'unsafe-inline' ${webview.cspSource}; script-src 'unsafe-inline' 'unsafe-eval'; font-src ${webview.cspSource} data:; img-src ${webview.cspSource} data: https:;`;
+		let html = fs.readFileSync(webviewPath, 'utf-8');
+
+		// 替换资源路径
+		html = html.replace('./assets/index.js', scriptUri.toString());
+		html = html.replace('./assets/style.css', styleUri.toString());
+
+		// 允许脚本从 webview.cspSource 加载，并允许 fetch/oniguruma wasm 等资源访问
+		const csp = `default-src 'none'; style-src 'unsafe-inline' ${webview.cspSource}; script-src 'unsafe-inline' 'unsafe-eval' ${webview.cspSource}; font-src ${webview.cspSource} data:; img-src ${webview.cspSource} data: https:; connect-src ${webview.cspSource} data: https:;`;
 		
 		// 注入 codicon CSS
 		const codiconLink = `<link rel="stylesheet" href="${codiconsUri}">`;

@@ -140,7 +140,42 @@ defineProps<{
   background: transparent;
   padding: 0;
   font-size: 13px;
-  color: var(--vscode-editor-foreground, #d4d4d4);
+  /* 不设置 color，让 Shiki 的内联样式生效 */
+}
+
+/* Shiki 生成的代码块样式 */
+/* .article-content :deep(.code-content pre.shiki) {
+  margin: 0;
+  padding: 0;
+} */
+
+/* .article-content :deep(.code-content pre.shiki code) {
+  background: transparent;
+  padding: 0;
+  font-size: 13px;
+  font-family: var(--vscode-editor-font-family, var(--font-mono, Consolas, 'Courier New', monospace));
+} */
+
+/* 确保 Shiki span 的背景继承编辑器背景 */
+.article-content :deep(.code-content pre.shiki),
+.article-content :deep(.code-content pre.shiki code),
+.article-content :deep(.code-content pre.shiki span) {
+  /* 使用 !important 覆盖 Shiki 的内联样式 */
+  background-color: var(--vscode-editor-background, #1e1e1e) !important;
+}
+
+/* .article-content :deep(.code-content .line) {
+  display: block;
+  min-height: 1.3em;
+} */
+
+.article-content :deep(.hljs) {
+  /* color: var(--vscode-editor-foreground, #d4d4d4); */
+  background-color: var(--vscode-editor-background, #1e1e1e);
+}
+
+.article-content :deep(.hljs .line) {
+  display: block;
 }
 
 /* 链接样式 */
