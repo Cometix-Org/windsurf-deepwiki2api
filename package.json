@@ -5,17 +5,12 @@
   "version": "0.0.1",
   "publisher": "cometix",
   "engines": {
-    "vscode": "^1.103.1"
+    "vscode": "^1.84.0"
   },
   "categories": [
     "Other"
   ],
-  "activationEvents": [
-    "onCommand:context-code-text.showContexts",
-    "onCommand:context-code-text.loginWindsurf",
-    "onView:contextCodeText.contextView",
-    "onCommand:context-code-text.showDeepWiki"
-  ],
+  "activationEvents": [],
   "main": "./dist/extension.js",
   "contributes": {
     "viewsContainers": {
