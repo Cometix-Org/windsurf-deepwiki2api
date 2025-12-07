@@ -25,7 +25,7 @@ export class NodeCreatorService {
 			const doc = await vscode.workspace.openTextDocument(uri);
 			const wordRange = doc.getWordRangeAtPosition(pos);
 			if (!wordRange) {
-				console.debug('[context-code-text] NodeCreatorService: No word range at position');
+				// 光标在空白区域，这是正常情况，静默返回
 				return;
 			}
 			const caretPos = wordRange.start;

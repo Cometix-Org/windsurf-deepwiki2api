@@ -1,16 +1,18 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue';
-import { marked } from 'marked';
+import { ref, onMounted, onUnmounted, provide, computed } from 'vue';
+import MarkdownRender, { setCustomComponents } from 'markstream-vue';
+import 'markstream-vue/index.css';
 import SymbolHeader from './components/SymbolHeader.vue';
 import ContentArea from './components/ContentArea.vue';
 import FollowupQuestions from './components/FollowupQuestions.vue';
+import CustomCodeBlock from './components/CustomCodeBlock.vue';
 import type { WebviewState, IncomingMessage } from './types';
 import { postMessage } from './vscode';
 
-// 配置 marked
-marked.setOptions({
-  breaks: true,
-  gfm: true
+// 注册自定义代码块组件（兼容不同节点类型命名）
+setCustomComponents('deepwiki', {
+  code_block: CustomCodeBlock,
+  fenced_code_block: CustomCodeBlock,
 });
 
 const state = ref<WebviewState>({
@@ -22,72 +24,53 @@ const state = ref<WebviewState>({
   followups: [],
   canGoPrev: false,
   canGoNext: false,
-  shikiTheme: undefined
+  isDark: true,
+  shikiThemeDark: 'github-dark-default',
+  shikiThemeLight: 'github-light-default',
+  iconBaseUri: ''
 });
 
-// 渲染 Markdown 为 HTML
-// 注意：代码块的语法高亮已在扩展端由 Shiki 完成，这里只处理其他 markdown 元素
-function renderMarkdown(md: string): string {
-  try {
-    return marked.parse(md) as string;
-  } catch {
-    return md;
-  }
-}
+// 提供主题配置和图标基础 URI 给子组件
+const isDark = computed(() => state.value.isDark ?? true);
+const shikiThemeDark = computed(() => state.value.shikiThemeDark || 'github-dark-default');
+const shikiThemeLight = computed(() => state.value.shikiThemeLight || 'github-light-default');
+const iconBaseUri = computed(() => state.value.iconBaseUri || '');
+
+provide('isDark', isDark);
+provide('shikiThemeDark', shikiThemeDark);
+provide('shikiThemeLight', shikiThemeLight);
+provide('iconBaseUri', iconBaseUri);
 
 function handleMessage(event: MessageEvent<IncomingMessage>) {
   const msg = event.data;
   
   if (msg.type === 'initState') {
-    // initState 的 content 可能是 markdown 或已处理的 HTML
-    const nextState: WebviewState = {
+    state.value = {
       ...msg.state,
-      content: renderMarkdown(msg.state.content)
+      isDark: msg.state.isDark ?? state.value.isDark,
+      shikiThemeDark: msg.state.shikiThemeDark || state.value.shikiThemeDark,
+      shikiThemeLight: msg.state.shikiThemeLight || state.value.shikiThemeLight,
+      iconBaseUri: msg.state.iconBaseUri || state.value.iconBaseUri
     };
-    state.value = nextState;
   } else if (msg.type === 'updateContent') {
-    // 扩展端已经完成了代码块的 Shiki 高亮，这里只需渲染其他 markdown 元素
-    state.value.content = renderMarkdown(msg.markdown);
+    state.value.content = msg.markdown;
     state.value.followups = msg.followups;
     state.value.isLoading = false;
   } else if (msg.type === 'loadingDone') {
     state.value.isLoading = false;
   } else if (msg.type === 'setTheme') {
-    // 主题变化由扩展端处理，webview 不再需要响应
-  }
-}
-
-// 处理代码块链接点击
-function handleCodeLinkClick(event: MouseEvent) {
-  const target = event.target as HTMLElement;
-  const link = target.closest('a.code-file-link') as HTMLAnchorElement | null;
-  
-  if (link) {
-    event.preventDefault();
-    const linkData = link.getAttribute('data-vscode-link');
-    if (linkData) {
-      try {
-        const data = JSON.parse(linkData);
-        postMessage('openFile', {
-          path: data.path,
-          startLine: data.startLine,
-          endLine: data.endLine
-        });
-      } catch {
-        // 解析失败，忽略
-      }
-    }
+    state.value.isDark = msg.isDark;
+    state.value.shikiThemeDark = msg.shikiThemeDark;
+    state.value.shikiThemeLight = msg.shikiThemeLight;
   }
 }
 
 onMounted(() => {
   window.addEventListener('message', handleMessage);
-  document.addEventListener('click', handleCodeLinkClick);
 });
 
 onUnmounted(() => {
   window.removeEventListener('message', handleMessage);
-  document.removeEventListener('click', handleCodeLinkClick);
 });
 </script>
 
@@ -102,10 +85,18 @@ onUnmounted(() => {
     />
     
     <!-- Wiki内容 -->
-    <ContentArea 
-      :is-loading="state.isLoading"
-      :content="state.content"
-    />
+    <ContentArea :is-loading="state.isLoading">
+      <MarkdownRender 
+        v-if="!state.isLoading && state.content"
+        :content="state.content" 
+        custom-id="deepwiki"
+        :isDark="isDark"
+        :themes="[shikiThemeDark, shikiThemeLight]"
+        :codeBlockDarkTheme="shikiThemeDark"
+        :codeBlockLightTheme="shikiThemeLight"
+        :codeBlockStream="true"
+      />
+    </ContentArea>
     
     <!-- Follow-up Questions -->
     <FollowupQuestions 
@@ -185,5 +176,113 @@ body {
 
 ::-webkit-scrollbar-track {
   background: transparent;
+}
+
+/* Markstream Vue 全局样式覆盖 */
+[data-custom-id="deepwiki"] {
+  line-height: 1.7;
+}
+
+[data-custom-id="deepwiki"] p {
+  margin: 10px 0;
+}
+
+[data-custom-id="deepwiki"] h1,
+[data-custom-id="deepwiki"] h2,
+[data-custom-id="deepwiki"] h3 {
+  color: var(--header-color, #e1e1e1);
+  margin: 20px 0 12px;
+  line-height: 1.4;
+}
+
+[data-custom-id="deepwiki"] h2 {
+  font-size: 16px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-color, #3e3e42);
+}
+
+[data-custom-id="deepwiki"] h3 {
+  font-size: 14px;
+}
+
+[data-custom-id="deepwiki"] ul {
+  padding-left: 20px;
+  margin: 10px 0;
+}
+
+[data-custom-id="deepwiki"] li {
+  margin-bottom: 8px;
+}
+
+/* 行内代码 - 灰色胶囊状 */
+[data-custom-id="deepwiki"] code:not(pre code) {
+  background-color: var(--vscode-editorWidget-background, var(--inline-code-bg, #3c3c3c));
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: var(--font-mono, Consolas, 'Courier New', monospace);
+  font-size: 0.9em;
+  color: var(--vscode-editor-foreground, #d4d4d4);
+}
+
+/* 链接样式 */
+[data-custom-id="deepwiki"] a {
+  color: var(--accent-color, #4a90e2);
+  text-decoration: none;
+}
+
+[data-custom-id="deepwiki"] a:hover {
+  text-decoration: underline;
+}
+
+/* 强调 */
+[data-custom-id="deepwiki"] strong {
+  color: var(--header-color, #e1e1e1);
+  font-weight: 600;
+}
+
+/* 水平分割线 */
+[data-custom-id="deepwiki"] hr {
+  border: 0;
+  border-top: 1px solid var(--border-color, #3e3e42);
+  margin: 20px 0;
+}
+
+/* ========================================
+   代码块样式 - 统一使用 VS Code 背景色
+   ======================================== */
+
+/* 代码块容器 - 覆盖 Tailwind bg-gray-900 */
+.code-block-container {
+  background-color: var(--vscode-editor-background) !important;
+  border-color: var(--vscode-editorWidget-border, var(--vscode-panel-border, #3e3e42)) !important;
+}
+
+/* 代码块头部 */
+.code-block-container .code-block-header {
+  background-color: var(--vscode-editor-background) !important;
+  border-color: var(--vscode-editorWidget-border, var(--vscode-panel-border, #3e3e42)) !important;
+}
+
+/* 代码块内容区 */
+.code-block-container .code-block-content {
+  background-color: var(--vscode-editor-background) !important;
+}
+
+/* Shiki 高亮区域 - 覆盖内联样式 background-color: #0d1117 */
+.code-block-container .shiki,
+.code-block-container .shiki[style],
+.code-block-container pre.shiki,
+.code-block-container pre.shiki[style] {
+  background-color: var(--vscode-editor-background) !important;
+}
+
+.code-block-container .shiki code,
+.code-block-container pre.shiki code {
+  background-color: transparent !important;
+}
+
+/* 清除可能的 token 级别背景 */
+.code-block-container .shiki span {
+  background-color: transparent !important;
 }
 </style>

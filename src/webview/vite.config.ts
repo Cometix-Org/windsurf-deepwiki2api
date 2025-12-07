@@ -19,6 +19,10 @@ export default defineConfig({
       }
     }
   },
-  base: './'
+  base: './',
+  // 优化依赖预构建，确保 shiki 相关模块被正确处理
+  optimizeDeps: {
+    include: ['shiki', 'stream-markdown']
+  }
 });
 

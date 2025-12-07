@@ -9,8 +9,14 @@ export interface WebviewState {
   followups: string[];
   canGoPrev: boolean;
   canGoNext: boolean;
-  // 当前使用的 Shiki theme 名称（可选，仅用于前端显示/调试）
-  shikiTheme?: string;
+  // VS Code 当前是否为暗色主题
+  isDark?: boolean;
+  // Shiki 暗色主题名称
+  shikiThemeDark?: string;
+  // Shiki 亮色主题名称
+  shikiThemeLight?: string;
+  // 图标资源基础 URI
+  iconBaseUri?: string;
 }
 
 export interface UpdateContentMessage {
@@ -29,7 +35,9 @@ export interface InitStateMessage {
 }
 export interface SetThemeMessage {
   type: 'setTheme';
-  theme: string;
+  isDark: boolean;
+  shikiThemeDark: string;
+  shikiThemeLight: string;
 }
 
 export type IncomingMessage = UpdateContentMessage | LoadingDoneMessage | InitStateMessage | SetThemeMessage;
