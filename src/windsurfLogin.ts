@@ -1,5 +1,4 @@
 import * as vscode from 'vscode';
-import { getOutputChannel } from './outputChannel';
 
 type RegisterUserResult = {
 	apiKey: string;
@@ -115,8 +114,6 @@ function buildRegisterUserBody(regCodeWithoutPlus: string): Uint8Array {
 async function callRegisterUser(regCodeWithoutPlus: string): Promise<RegisterUserResult> {
 	const url = 'https://register.windsurf.com/exa.seat_management_pb.SeatManagementService/RegisterUser';
 	const body = buildRegisterUserBody(regCodeWithoutPlus);
-	const channel = getOutputChannel();
-	channel.appendLine('[WindsurfLogin] RegisterUser body hex: ' + Buffer.from(body).toString());
 	const response = await fetch(url, {
 		method: 'POST',
 		headers: {
@@ -186,9 +183,6 @@ function buildGetUserJwtBody(apiKey: string): Uint8Array {
 async function callGetUserJwt(baseUrl: string, apiKey: string): Promise<string> {
 	const url = `${baseUrl.replace(/\/$/, '')}/exa.auth_pb.AuthService/GetUserJwt`;
 	const body = buildGetUserJwtBody(apiKey);
-	const channel = getOutputChannel();
-	channel.appendLine('[WindsurfLogin] GetUserJwt body hex: ' + Buffer.from(body).toString('hex'));
-	channel.appendLine('[WindsurfLogin] GetUserJwt body base64: ' + Buffer.from(body).toString('base64'));
 	const response = await fetch(url, {
 		method: 'POST',
 		headers: {

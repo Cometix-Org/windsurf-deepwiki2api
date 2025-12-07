@@ -100,7 +100,7 @@ export class ContextWebviewViewProvider implements vscode.WebviewViewProvider {
 	private handleWebviewMessage(message: { type: string; [key: string]: unknown }): void {
 		switch (message.type) {
 			case 'refresh':
-				void this.updateForEditor(this.currentEditor);
+				void this.refreshCurrentEntry();
 				break;
 			case 'navigate':
 				this.handleNavigate(message.direction as 'prev' | 'next');
@@ -151,6 +151,105 @@ export class ContextWebviewViewProvider implements vscode.WebviewViewProvider {
 		}
 	}
 
+	/** 导出文章内容到新文件 */
+	public async exportArticleToNewFile(): Promise<void> {
+		const entry = this.history[this.historyIndex];
+		if (!entry || !entry.markdown) {
+			void vscode.window.showWarningMessage('没有可导出的文章内容');
+			return;
+		}
+
+		const content = `# DeepWiki: ${entry.title}\n\n` +
+			`**Symbol:** ${entry.title}\n` +
+			`**Kind:** ${entry.symbolKindName || 'Unknown'}\n` +
+			`**Location:** ${entry.filePath}:${entry.line}\n\n` +
+			`---\n\n` +
+			entry.markdown;
+
+		const doc = await vscode.workspace.openTextDocument({
+			content,
+			language: 'markdown'
+		});
+		await vscode.window.showTextDocument(doc, { preview: false });
+	}
+
+	/** 导出发送给 DeepWiki 的上下文内容到新文件 */
+	public async exportContextToNewFile(): Promise<void> {
+		const entry = this.history[this.historyIndex];
+		if (!entry) {
+			void vscode.window.showWarningMessage('没有可导出的上下文内容');
+			return;
+		}
+
+		const sections: string[] = [];
+		
+		sections.push(`# DeepWiki Context for: ${entry.title}`);
+		sections.push('');
+		sections.push(`**Symbol:** ${entry.title}`);
+		sections.push(`**Kind:** ${entry.symbolKindName || 'Unknown'}`);
+		sections.push(`**Location:** ${entry.filePath}:${entry.line}`);
+		sections.push('');
+		sections.push('---');
+		sections.push('');
+
+		if (entry.fileContext) {
+			sections.push('## File Context');
+			sections.push('');
+			sections.push('```');
+			sections.push(entry.fileContext);
+			sections.push('```');
+			sections.push('');
+		}
+
+		if (entry.usageContext) {
+			sections.push('## Usage Context');
+			sections.push('');
+			sections.push('```');
+			sections.push(entry.usageContext);
+			sections.push('```');
+			sections.push('');
+		}
+
+		if (entry.traceContext) {
+			sections.push('## Trace Context');
+			sections.push('');
+			sections.push('```');
+			sections.push(entry.traceContext);
+			sections.push('```');
+			sections.push('');
+		}
+
+		if (entry.quickGrepContext) {
+			sections.push('## Quick Grep Context');
+			sections.push('');
+			sections.push('```');
+			sections.push(entry.quickGrepContext);
+			sections.push('```');
+			sections.push('');
+		}
+
+		if (entry.fullGrepContext) {
+			sections.push('## Full Grep Context');
+			sections.push('');
+			sections.push('```');
+			sections.push(entry.fullGrepContext);
+			sections.push('```');
+			sections.push('');
+		}
+
+		if (!entry.fileContext && !entry.usageContext && !entry.traceContext && !entry.quickGrepContext && !entry.fullGrepContext) {
+			sections.push('*No context information available.*');
+		}
+
+		const content = sections.join('\n');
+
+		const doc = await vscode.workspace.openTextDocument({
+			content,
+			language: 'markdown'
+		});
+		await vscode.window.showTextDocument(doc, { preview: false });
+	}
+
 	private copyFollowupWithContext(question: string): void {
 		const trimmed = String(question ?? '').trim();
 		if (!trimmed) {
@@ -192,6 +291,140 @@ export class ContextWebviewViewProvider implements vscode.WebviewViewProvider {
 			this.historyIndex++;
 			this.showHistoryEntry();
 			this.updateNavigationContext();
+		}
+	}
+
+	/** 使用当前历史记录的上下文信息重新请求 DeepWiki */
+	public async refreshCurrentEntry(): Promise<void> {
+		const entry = this.history[this.historyIndex];
+		if (!entry) {
+			// 如果没有历史记录，回退到从编辑器获取
+			void this.updateForEditor(this.currentEditor);
+			return;
+		}
+
+		if (!this.view) {
+			return;
+		}
+
+		const gen = ++this.updateGeneration;
+
+		// 设置加载状态
+		this.sendInitState({
+			title: entry.title,
+			symbolKindName: entry.symbolKindName,
+			symbolKind: entry.symbolKind,
+			isLoading: true,
+			content: `正在重新向 DeepWiki 请求符号 "${entry.title}" 的解释…`,
+			followups: [],
+			...this.getNavigationState()
+		});
+
+		try {
+			let followupBuffer = '';
+			let articleText = '';
+			this.currentArticle = '';
+			let pendingRender = false;
+
+			const renderState = () => {
+				if (!this.view || gen !== this.updateGeneration) {
+					return;
+				}
+				if (pendingRender) {
+					return;
+				}
+				pendingRender = true;
+				
+				setTimeout(() => {
+					pendingRender = false;
+					if (gen !== this.updateGeneration) { return; }
+					
+					const items = followupBuffer
+						.split(/\r?\n/)
+						.map(s => s.trim())
+						.filter(Boolean);
+					const seen = new Set<string>();
+					const unique: string[] = [];
+					for (const it of items) {
+						if (!seen.has(it)) {
+							seen.add(it);
+							unique.push(it);
+						}
+					}
+					
+					this.currentArticle = articleText;
+					this.sendUpdateContent(articleText, unique);
+				}, 50);
+			};
+
+			// 更新标题和符号信息
+			this.sendInitState({
+				title: entry.title,
+				symbolKindName: entry.symbolKindName,
+				symbolKind: entry.symbolKind,
+				isLoading: true,
+				content: '（流式加载中…）',
+				followups: [],
+				...this.getNavigationState()
+			});
+
+			// 使用历史记录中保存的上下文信息重新请求
+			await streamDeepwikiArticle({
+				symbolName: entry.title,
+				symbolUri: `file://${entry.filePath}`,
+				symbolType: entry.symbolKind,
+				fileContext: entry.fileContext,
+				usageContext: entry.usageContext,
+				traceContext: entry.traceContext,
+				quickGrepContext: entry.quickGrepContext,
+				fullGrepContext: entry.fullGrepContext
+			}, (m: DeepwikiStreamMessage) => {
+				if (!this.view || gen !== this.updateGeneration) {
+					return;
+				}
+				if (m.type === 'article' && (m as { text?: string }).text) {
+					articleText += String((m as { text?: string }).text);
+					renderState();
+				} else if (m.type === 'followup' && (m as { text?: string }).text) {
+					followupBuffer += String((m as { text?: string }).text);
+					renderState();
+				} else if (m.type === 'done') {
+					renderState();
+					this.sendLoadingDone();
+				}
+			});
+			if (gen !== this.updateGeneration) { return; }
+			renderState();
+			this.sendLoadingDone();
+
+			// 更新当前历史记录条目（而不是新增）
+			if (articleText) {
+				const followups = followupBuffer
+					.split(/\r?\n/)
+					.map(s => s.trim())
+					.filter(Boolean)
+					.filter((v, i, a) => a.indexOf(v) === i);
+				
+				// 更新当前条目
+				this.history[this.historyIndex] = {
+					...entry,
+					markdown: articleText,
+					followups
+				};
+			}
+		} catch (err) {
+			if (gen !== this.updateGeneration) { return; }
+			const message = err instanceof Error ? err.message : String(err);
+			
+			this.sendInitState({
+				title: 'Error',
+				symbolKindName: '',
+				symbolKind: 0,
+				isLoading: false,
+				content: `DeepWiki 请求失败或解析出错：\n\n\`${message}\``,
+				followups: [],
+				...this.getNavigationState()
+			});
 		}
 	}
 

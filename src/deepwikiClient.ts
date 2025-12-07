@@ -5,7 +5,6 @@ import * as zlib from 'zlib';
 import { getGlobalState } from './globalState';
 import { BinaryWriter, BinaryReader } from '@protobuf-ts/runtime';
 import { GetDeepWikiRequest as PBGetDeepWikiRequest, GetDeepWikiResponse as PBGetDeepWikiResponse, Metadata as PBMetadata } from './generated/deepwiki_full';
-import { getOutputChannel } from './outputChannel';
 
 type DeepwikiRequestType = 0 | 1 | 2;
 type DeepwikiSymbolType = number;
@@ -46,7 +45,6 @@ function generateSessionId(): string {
 
 function buildOsInfoJson(): string {
 	const release = os.release();
-	const totalMem = os.totalmem();
 	const info = {
 		Os: 'windows',
 		Arch: os.arch(),
@@ -232,15 +230,10 @@ function buildDeepwikiRequestBytesFromJson(jsonObj: any): Uint8Array {
 }
 
 function parseDeepwikiResponses(data: Uint8Array): string {
-	const channel = getOutputChannel();
-	channel.appendLine('[DeepWiki] Raw response bytes length: ' + data.length);
-	channel.appendLine('[DeepWiki] Raw response hex (first 4096): ' + Buffer.from(data).toString('hex').slice(0, 4096));
-	channel.appendLine('[DeepWiki] Raw response base64 (first 4096): ' + Buffer.from(data).toString('base64').slice(0, 4096));
 	const articleParts: string[] = [];
 	const followupParts: string[] = [];
 	let isArticleDoneSeen = false;
 	let offset = 0;
-	let frameIndex = 0;
 	while (offset + 5 <= data.length) {
 		const flags = data[offset];
 		offset += 1;
@@ -255,65 +248,51 @@ function parseDeepwikiResponses(data: Uint8Array): string {
 		}
 		const frame = data.slice(offset, offset + len);
 		offset += len;
-		frameIndex += 1;
-		channel.appendLine(`[DeepWiki] Frame #${frameIndex} flags=${flags} len=${len}`);
-		channel.appendLine('[DeepWiki] Frame raw hex (first 512): ' + Buffer.from(frame).toString('hex').slice(0, 512));
-    const compressed = (flags & 0x01) !== 0;
-    let uncompressedBuf: Buffer;
-    if (compressed) {
-            try {
-                    uncompressedBuf = zlib.gunzipSync(Buffer.from(frame));
-            } catch {
-                    uncompressedBuf = Buffer.from(frame);
-            }
-    } else {
-            uncompressedBuf = Buffer.from(frame);
-    }
-		channel.appendLine(
-			'[DeepWiki] Frame uncompressed hex (first 512): ' + uncompressedBuf.toString('hex').slice(0, 512)
-		);
+		const compressed = (flags & 0x01) !== 0;
+		let uncompressedBuf: Buffer;
+		if (compressed) {
+			try {
+				uncompressedBuf = zlib.gunzipSync(Buffer.from(frame));
+			} catch {
+				uncompressedBuf = Buffer.from(frame);
+			}
+		} else {
+			uncompressedBuf = Buffer.from(frame);
+		}
 
 		// 尝试识别 JSON 错误帧（Connect end_stream error）
 		const trimmed = uncompressedBuf.toString('utf8').trimStart();
 		if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-			channel.appendLine('[DeepWiki] Frame JSON (pretty):');
-			try {
-				const obj = JSON.parse(trimmed);
-				channel.appendLine(JSON.stringify(obj, null, 2));
-			} catch {
-				channel.appendLine(trimmed);
-			}
 			continue;
 		}
 
 		// 非 JSON：使用生成的 protobuf 解码 text_delta
-        try {
-            const reader = new BinaryReader(uncompressedBuf);
-            const msg = PBGetDeepWikiResponse.internalBinaryRead(reader, uncompressedBuf.length, {
-                readUnknownField: false,
-                readerFactory: (bytes: Uint8Array) => new BinaryReader(bytes)
-            } as any);
-            const text = msg.response?.textDelta ?? '';
-            const convId = msg.response?.conversationId ?? '';
-            const isFollowup = /-followup$/i.test(convId);
-            const followupQuestions = (msg as any).followupQuestions as string | undefined;
-            if (typeof msg.isArticleDone === 'boolean' && msg.isArticleDone) {
-                isArticleDoneSeen = true;
-            }
-            channel.appendLine('[DeepWiki] Frame text_delta: ' + (text || '<none>'));
-            if (text) {
-                if (isFollowup) {
-                    followupParts.push(text);
-                } else {
-                    articleParts.push(text);
-                }
-            }
-            if (followupQuestions && followupQuestions.trim()) {
-                followupParts.push(followupQuestions);
-            }
-        } catch {
-            // ignore undecodable frames
-        }
+		try {
+			const reader = new BinaryReader(uncompressedBuf);
+			const msg = PBGetDeepWikiResponse.internalBinaryRead(reader, uncompressedBuf.length, {
+				readUnknownField: false,
+				readerFactory: (bytes: Uint8Array) => new BinaryReader(bytes)
+			} as any);
+			const text = msg.response?.textDelta ?? '';
+			const convId = msg.response?.conversationId ?? '';
+			const isFollowup = /-followup$/i.test(convId);
+			const followupQuestions = (msg as any).followupQuestions as string | undefined;
+			if (typeof msg.isArticleDone === 'boolean' && msg.isArticleDone) {
+				isArticleDoneSeen = true;
+			}
+			if (text) {
+				if (isFollowup) {
+					followupParts.push(text);
+				} else {
+					articleParts.push(text);
+				}
+			}
+			if (followupQuestions && followupQuestions.trim()) {
+				followupParts.push(followupQuestions);
+			}
+		} catch {
+			// ignore undecodable frames
+		}
 	}
 	const article = articleParts.join('');
 	const followupsRaw = followupParts.join('');
@@ -324,7 +303,6 @@ function parseDeepwikiResponses(data: Uint8Array): string {
 	if (unique.length === 0) {
 		return article;
 	}
-	channel.appendLine(`[DeepWiki] Collected follow-up questions: ${unique.length}`);
 	const section = ['','---','','后续提问', ...unique.map(q => `- ${q}`)].join('\n');
 	return article + '\n' + section;
 }
@@ -336,13 +314,10 @@ export async function fetchDeepwikiArticle(params: DeepwikiContextParams): Promi
 	const apiKey = config.get<string>('windsurfApiKey') ?? '';
 	const authToken = config.get<string>('windsurfJwt') ?? '';
 	if (!apiKey || !authToken) {
-		throw new Error('缺少 Windsurf 登录信息，请先运行 “Context Code Text: Windsurf Login”。');
+		throw new Error('缺少 Windsurf 登录信息，请先运行 "Context Code Text: Windsurf Login"。');
 	}
 
 	const sessionId = generateSessionId();
-	const channel = getOutputChannel();
-	channel.appendLine('[DeepWiki] Request symbol: ' + params.symbolName);
-	channel.appendLine('[DeepWiki] Request URI: ' + params.symbolUri);
 
 	// 结构化 JSON 视图，方便和 HAR/deepwiki.json 对比
 	const modelType: DeepwikiModelType = 1;
@@ -369,16 +344,9 @@ export async function fetchDeepwikiArticle(params: DeepwikiContextParams): Promi
 		language: '中文（中国）',
 		model_type: deepwikiModelTypeName(modelType)
 	};
-	channel.appendLine('[DeepWiki] Request JSON:');
-	channel.appendLine(JSON.stringify(requestJson, null, 2));
 
 	// Build request bytes from the JSON to mirror Python (JSON -> proto bytes)
 	const requestBytes = buildDeepwikiRequestBytesFromJson(requestJson);
-	channel.appendLine('[DeepWiki] Request bytes length: ' + requestBytes.length);
-	channel.appendLine('[DeepWiki] Request hex (first 4096): ' + Buffer.from(requestBytes).toString('hex').slice(0, 4096));
-	channel.appendLine(
-		'[DeepWiki] Request base64 (first 4096): ' + Buffer.from(requestBytes).toString('base64').slice(0, 4096)
-	);
 	const gzipped = zlib.gzipSync(requestBytes);
 
 	const frame = Buffer.alloc(1 + 4 + gzipped.length);
@@ -423,13 +391,10 @@ async function buildDeepwikiRequestFrame(params: DeepwikiContextParams): Promise
     const apiKey = config.get<string>('windsurfApiKey') ?? '';
     const authToken = config.get<string>('windsurfJwt') ?? '';
     if (!apiKey || !authToken) {
-        throw new Error('缺少 Windsurf 登录信息，请先运行 “Context Code Text: Windsurf Login”。');
+        throw new Error('缺少 Windsurf 登录信息，请先运行 "Context Code Text: Windsurf Login"。');
     }
 
     const sessionId = generateSessionId();
-    const channel = getOutputChannel();
-    channel.appendLine('[DeepWiki] Request symbol: ' + params.symbolName);
-    channel.appendLine('[DeepWiki] Request URI: ' + params.symbolUri);
 
     const modelType: DeepwikiModelType = 1;
     const requestJson = {
@@ -455,13 +420,8 @@ async function buildDeepwikiRequestFrame(params: DeepwikiContextParams): Promise
         language: '中文（中国）',
         model_type: deepwikiModelTypeName(modelType)
     };
-    channel.appendLine('[DeepWiki] Request JSON:');
-    channel.appendLine(JSON.stringify(requestJson, null, 2));
 
     const requestBytes = buildDeepwikiRequestBytesFromJson(requestJson);
-    channel.appendLine('[DeepWiki] Request bytes length: ' + requestBytes.length);
-    channel.appendLine('[DeepWiki] Request hex (first 4096): ' + Buffer.from(requestBytes).toString('hex').slice(0, 4096));
-    channel.appendLine('[DeepWiki] Request base64 (first 4096): ' + Buffer.from(requestBytes).toString('base64').slice(0, 4096));
     const gzipped = zlib.gzipSync(requestBytes);
 
     const frame = Buffer.alloc(1 + 4 + gzipped.length);
@@ -496,7 +456,6 @@ export async function streamDeepwikiArticle(
     params: DeepwikiContextParams,
     onMessage: (m: DeepwikiStreamMessage) => void
 ): Promise<void> {
-    const channel = getOutputChannel();
     const response = await connectAndFetch(params);
 
     const decodeFrame = (flags: number, payload: Uint8Array) => {
@@ -511,17 +470,9 @@ export async function streamDeepwikiArticle(
         } else {
             uncompressed = Buffer.from(payload);
         }
-        channel.appendLine('[DeepWiki] Frame uncompressed hex (first 512): ' + uncompressed.toString('hex').slice(0, 512));
 
         const trimmed = uncompressed.toString('utf8').trimStart();
         if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-            channel.appendLine('[DeepWiki] Frame JSON (pretty):');
-            try {
-                const obj = JSON.parse(trimmed);
-                channel.appendLine(JSON.stringify(obj, null, 2));
-            } catch {
-                channel.appendLine(trimmed);
-            }
             return;
         }
 
@@ -551,7 +502,6 @@ export async function streamDeepwikiArticle(
 
     const reader: any = response.body?.getReader ? response.body.getReader() : null;
     let buffer = Buffer.alloc(0);
-    let frameIndex = 0;
     const processBuffer = () => {
         while (buffer.length >= 5) {
             const flags = buffer[0];
@@ -559,9 +509,6 @@ export async function streamDeepwikiArticle(
             if (len < 0 || buffer.length < 5 + len) {break;}
             const payload = buffer.subarray(5, 5 + len);
             buffer = buffer.subarray(5 + len);
-            frameIndex += 1;
-            channel.appendLine(`[DeepWiki] Frame #${frameIndex} flags=${flags} len=${len}`);
-            channel.appendLine('[DeepWiki] Frame raw hex (first 512): ' + Buffer.from(payload).toString('hex').slice(0, 512));
             decodeFrame(flags, payload);
         }
     };

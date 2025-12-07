@@ -58,10 +58,6 @@
     },
     "commands": [
       {
-        "command": "context-code-text.showContexts",
-        "title": "Show Contexts"
-      },
-      {
         "command": "context-code-text.loginWindsurf",
         "title": "Context Code Text: Windsurf Login"
       },
@@ -90,15 +86,25 @@
         "command": "context-code-text.copyArticle",
         "title": "Copy Article",
         "icon": "$(copy)"
+      },
+      {
+        "command": "context-code-text.exportArticle",
+        "title": "Export Article to New File"
+      },
+      {
+        "command": "context-code-text.exportContext",
+        "title": "Export Context to New File"
+      }
+    ],
+    "submenus": [
+      {
+        "id": "contextCodeText.exportMenu",
+        "label": "More Actions",
+        "icon": "$(ellipsis)"
       }
     ],
     "menus": {
       "editor/context": [
-        {
-          "command": "context-code-text.showContexts",
-          "group": "navigation@9",
-          "when": "contextCodeText.hasOutlineContext"
-        },
         {
           "command": "context-code-text.showDeepWiki",
           "group": "navigation@9",
@@ -125,6 +131,21 @@
           "command": "context-code-text.refresh",
           "when": "view == contextCodeText.contextView",
           "group": "navigation@4"
+        },
+        {
+          "submenu": "contextCodeText.exportMenu",
+          "when": "view == contextCodeText.contextView",
+          "group": "navigation@5"
+        }
+      ],
+      "contextCodeText.exportMenu": [
+        {
+          "command": "context-code-text.exportArticle",
+          "group": "export@1"
+        },
+        {
+          "command": "context-code-text.exportContext",
+          "group": "export@2"
         }
       ]
     }
@@ -155,6 +176,7 @@
   "dependencies": {
     "@protobuf-ts/runtime": "^2.11.1",
     "@protobuf-ts/runtime-rpc": "^2.11.1",
+    "@vscode/ripgrep": "^1.15.14",
     "node-fetch": "^3.3.2",
     "shiki": "^1.22.0"
   },
