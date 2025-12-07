@@ -2,7 +2,7 @@
   "name": "context-code-text",
   "displayName": "context-code-text",
   "description": "",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "publisher": "cometix",
   "engines": {
     "vscode": "^1.84.0"
